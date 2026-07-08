@@ -115,10 +115,14 @@ BONUS_LABELS = {
     "tier_gold": "Бонус за статус Золотой",
     "review_no_photo": "Отзыв без фото",
     "review_photo": "Отзыв с фото",
+    "lottery_jackpot": "Джекпот в лототроне 🎰",
+    "lottery_win": "Выигрыш в лототроне 🎰",
 }
 
 REVIEW_POINTS_NO_PHOTO = os.environ.get("REVIEW_POINTS_NO_PHOTO", "15 000")
 REVIEW_POINTS_PHOTO = os.environ.get("REVIEW_POINTS_PHOTO", "25 000")
+LOTTERY_JACKPOT_POINTS = os.environ.get("LOTTERY_JACKPOT_POINTS", "30 000")
+LOTTERY_WIN_POINTS = os.environ.get("LOTTERY_WIN_POINTS", "10 000")
 
 # что администратор должен начислить гостю при погашении кода
 # (checkin намеренно не включён - это просто счётчик визита, без начисления)
@@ -131,6 +135,8 @@ BONUS_AMOUNTS = {
     "tier_gold": f"+{os.environ.get('BONUS_PERCENT_TIER_GOLD', '25')}% к пополнению",
     "review_no_photo": f"{REVIEW_POINTS_NO_PHOTO} баллов на баланс",
     "review_photo": f"{REVIEW_POINTS_PHOTO} баллов на баланс",
+    "lottery_jackpot": f"{LOTTERY_JACKPOT_POINTS} баллов на баланс",
+    "lottery_win": f"{LOTTERY_WIN_POINTS} баллов на баланс",
 }
 
 TIER_SILVER_VISITS = int(os.environ.get("TIER_SILVER_VISITS", "10"))
@@ -182,7 +188,7 @@ MAIN_MENU_KB = ReplyKeyboardMarkup(
         [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="🎉 Акции")],
         [KeyboardButton(text="📍 Клуб"), KeyboardButton(text="👥 Пригласить друга")],
         [KeyboardButton(text="🧾 Прайс"), KeyboardButton(text="✅ Я в клубе")],
-        [KeyboardButton(text="💎 Мой статус")],
+        [KeyboardButton(text="💎 Мой статус"), KeyboardButton(text="🎰 Лототрон")],
     ],
     resize_keyboard=True,
 )
@@ -244,6 +250,7 @@ def db_init() -> None:
         ("first_checkin_at", "TEXT"),
         ("review_prompted", "INTEGER DEFAULT 0"),
         ("review_bonus_claimed", "INTEGER DEFAULT 0"),
+        ("last_spin_date", "TEXT"),
     ):
         try:
             conn.execute(f"ALTER TABLE subscribers ADD COLUMN {column} {coltype}")
@@ -451,6 +458,24 @@ def db_mark_review_claimed(telegram_id: int) -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "UPDATE subscribers SET review_bonus_claimed = 1 WHERE telegram_id = ?", (telegram_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_last_spin_date(telegram_id: int) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT last_spin_date FROM subscribers WHERE telegram_id = ?", (telegram_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
+def db_set_last_spin_date(telegram_id: int, date_str: str) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE subscribers SET last_spin_date = ? WHERE telegram_id = ?", (date_str, telegram_id)
     )
     conn.commit()
     conn.close()
@@ -725,6 +750,35 @@ async def menu_status(message: Message) -> None:
         f"{progress}\n\n"
         "Визит засчитывается, когда администратор гасит твой код из кнопки «✅ Я в клубе»."
     )
+
+
+@router.message(F.text == "🎰 Лототрон")
+async def menu_lottery(message: Message) -> None:
+    user_id = message.from_user.id
+    if not db_is_subscriber(user_id):
+        await message.answer("Сначала подпишись через /start 🙂")
+        return
+
+    today = datetime.now(TASHKENT_TZ).date().isoformat()
+    if db_get_last_spin_date(user_id) == today:
+        await message.answer("Ты уже крутил барабан сегодня 🎰\nОдин спин в день — приходи завтра!")
+        return
+
+    db_set_last_spin_date(user_id, today)
+    dice_msg = await message.answer_dice(emoji="🎰")
+    value = dice_msg.dice.value
+    await asyncio.sleep(4)  # даём анимации доиграть
+
+    if value == 64:
+        code = db_create_bonus(user_id, "lottery_jackpot")
+        amount = BONUS_AMOUNTS.get("lottery_jackpot")
+        await message.answer(f"🎉 ДЖЕКПОТ! 777 🎰\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
+    elif value in (1, 22, 43):
+        code = db_create_bonus(user_id, "lottery_win")
+        amount = BONUS_AMOUNTS.get("lottery_win")
+        await message.answer(f"🎉 Выигрыш! Три одинаковых символа!\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
+    else:
+        await message.answer("Почти! В этот раз не повезло 😅\nПриходи завтра, будет ещё один спин!")
 
 
 # ---------- ОБРАБОТЧИКИ: АДМИН ----------
