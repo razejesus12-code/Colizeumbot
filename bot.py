@@ -6,11 +6,11 @@ import sqlite3
 import string
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
- 
+
 from dotenv import load_dotenv
- 
+
 load_dotenv()  # если рядом есть файл .env — подхватит переменные из него (для локального теста)
- 
+
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -28,14 +28,14 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
- 
+
 # ---------- НАСТРОЙКИ (заполняются из переменных окружения) ----------
 BOT_TOKEN = os.environ["BOT_TOKEN"]  # токен от @BotFather
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "Colizeum_Tashkent_City_bot")
 ADMIN_IDS = {
     int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()
 }
- 
+
 BONUS_TEXT = os.environ.get(
     "BONUS_TEXT",
     "Спасибо за подписку! 🎁\n\n"
@@ -66,7 +66,7 @@ REMINDER_TEXT = os.environ.get(
     "Покажи это сообщение администратору на стойке в течение 5 дней.",
 )
 REMINDER_DELAY_DAYS = int(os.environ.get("REMINDER_DELAY_DAYS", "3"))
- 
+
 CLUB_ADDRESS = os.environ.get("CLUB_ADDRESS", "уточняется — впишите адрес в переменную CLUB_ADDRESS")
 CLUB_PHONE = os.environ.get("CLUB_PHONE", "уточняется — впишите телефон в переменную CLUB_PHONE")
 CLUB_HOURS = os.environ.get("CLUB_HOURS", "уточняется — впишите часы работы в переменную CLUB_HOURS")
@@ -94,17 +94,17 @@ HOOKAH_TEXT = os.environ.get(
     "Будни после 17:00 — 200 000 UZS\n"
     "Выходные — 200 000 UZS",
 )
- 
+
 DB_PATH = os.environ.get("DB_PATH", "subscribers.db")
 TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMOS_DIR = os.path.join(BASE_DIR, "promos")
 PACKAGES_DIR = os.path.join(BASE_DIR, "packages")
 HOOKAH_DIR = os.path.join(BASE_DIR, "hookah")
- 
+
 # буквы/цифры без похожих друг на друга символов (0/O, 1/I/L), чтобы код было легко читать вслух
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
- 
+
 BONUS_LABELS = {
     "welcome": "Бонус за подписку",
     "daytime": "Усиленный дневной бонус",
@@ -114,9 +114,9 @@ BONUS_LABELS = {
     "tier_silver": "Бонус за статус Серебряный",
     "tier_gold": "Бонус за статус Золотой",
 }
- 
-TIER_SILVER_VISITS = int(os.environ.get("TIER_SILVER_VISITS", "5"))
-TIER_GOLD_VISITS = int(os.environ.get("TIER_GOLD_VISITS", "15"))
+
+TIER_SILVER_VISITS = int(os.environ.get("TIER_SILVER_VISITS", "10"))
+TIER_GOLD_VISITS = int(os.environ.get("TIER_GOLD_VISITS", "25"))
 TIER_SILVER_TEXT = os.environ.get(
     "TIER_SILVER_TEXT",
     "🥈 Поздравляем, ты получил статус Серебряный гость!\n"
@@ -129,18 +129,18 @@ TIER_GOLD_TEXT = os.environ.get(
     "Плюс приоритет на бронирование любимого места.",
 )
 TIER_LABELS = {"": "Без статуса", "silver": "🥈 Серебряный", "gold": "🥇 Золотой"}
- 
+
 logging.basicConfig(level=logging.INFO)
- 
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
- 
+
 # временное хранилище "кто по чьей ссылке идёт регистрироваться"
 # (живёт только пока бот не перезапущен - этого достаточно для короткого пути /start -> контакт)
 PENDING_REFERRALS: dict[int, int] = {}
- 
+
 MAIN_MENU_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="🎉 Акции")],
@@ -150,8 +150,8 @@ MAIN_MENU_KB = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
 )
- 
- 
+
+
 # ---------- БАЗА ДАННЫХ ----------
 def db_init() -> None:
     conn = sqlite3.connect(DB_PATH)
@@ -193,8 +193,8 @@ def db_init() -> None:
             pass  # колонка уже есть
     conn.commit()
     conn.close()
- 
- 
+
+
 def db_add_subscriber(
     telegram_id: int, username: str, full_name: str, phone: str, referred_by: int | None
 ) -> None:
@@ -209,8 +209,8 @@ def db_add_subscriber(
     )
     conn.commit()
     conn.close()
- 
- 
+
+
 def db_is_subscriber(telegram_id: int) -> bool:
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute(
@@ -218,22 +218,22 @@ def db_is_subscriber(telegram_id: int) -> bool:
     ).fetchone()
     conn.close()
     return row is not None
- 
- 
+
+
 def db_all_subscriber_ids() -> list[int]:
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT telegram_id FROM subscribers").fetchall()
     conn.close()
     return [r[0] for r in rows]
- 
- 
+
+
 def db_count() -> int:
     conn = sqlite3.connect(DB_PATH)
     n = conn.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]
     conn.close()
     return n
- 
- 
+
+
 def db_referral_count(telegram_id: int) -> int:
     conn = sqlite3.connect(DB_PATH)
     n = conn.execute(
@@ -241,15 +241,15 @@ def db_referral_count(telegram_id: int) -> int:
     ).fetchone()[0]
     conn.close()
     return n
- 
- 
+
+
 def db_remove_subscriber(telegram_id: int) -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM subscribers WHERE telegram_id = ?", (telegram_id,))
     conn.commit()
     conn.close()
- 
- 
+
+
 def db_due_for_reminder(delay_days: int) -> list[int]:
     cutoff = (datetime.now() - timedelta(days=delay_days)).isoformat()
     conn = sqlite3.connect(DB_PATH)
@@ -259,8 +259,8 @@ def db_due_for_reminder(delay_days: int) -> list[int]:
     ).fetchall()
     conn.close()
     return [r[0] for r in rows]
- 
- 
+
+
 def db_mark_reminder_sent(telegram_id: int) -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -268,8 +268,8 @@ def db_mark_reminder_sent(telegram_id: int) -> None:
     )
     conn.commit()
     conn.close()
- 
- 
+
+
 def db_create_bonus(telegram_id: int, bonus_type: str) -> str:
     conn = sqlite3.connect(DB_PATH)
     while True:
@@ -284,22 +284,22 @@ def db_create_bonus(telegram_id: int, bonus_type: str) -> str:
     conn.commit()
     conn.close()
     return code
- 
- 
+
+
 def db_redeem_bonus(code: str, admin_id: int) -> tuple[str, dict | None]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM bonuses WHERE code = ?", (code,)).fetchone()
- 
+
     if row is None:
         conn.close()
         return "not_found", None
- 
+
     if row["used_at"]:
         result = dict(row)
         conn.close()
         return "already_used", result
- 
+
     conn.execute(
         "UPDATE bonuses SET used_at = ?, used_by_admin = ? WHERE code = ?",
         (datetime.now().isoformat(), admin_id, code),
@@ -308,8 +308,8 @@ def db_redeem_bonus(code: str, admin_id: int) -> tuple[str, dict | None]:
     updated = conn.execute("SELECT * FROM bonuses WHERE code = ?", (code,)).fetchone()
     conn.close()
     return "ok", dict(updated)
- 
- 
+
+
 def db_get_visits(telegram_id: int) -> int:
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute(
@@ -317,8 +317,8 @@ def db_get_visits(telegram_id: int) -> int:
     ).fetchone()
     conn.close()
     return row[0] if row and row[0] is not None else 0
- 
- 
+
+
 def db_get_tier(telegram_id: int) -> str:
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute(
@@ -326,8 +326,8 @@ def db_get_tier(telegram_id: int) -> str:
     ).fetchone()
     conn.close()
     return row[0] if row and row[0] else ""
- 
- 
+
+
 def db_increment_visits(telegram_id: int) -> int:
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -340,21 +340,21 @@ def db_increment_visits(telegram_id: int) -> int:
     ).fetchone()[0]
     conn.close()
     return new_count
- 
- 
+
+
 def db_set_tier(telegram_id: int, tier: str) -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.execute("UPDATE subscribers SET tier = ? WHERE telegram_id = ?", (tier, telegram_id))
     conn.commit()
     conn.close()
- 
- 
+
+
 # ---------- СОСТОЯНИЯ ДЛЯ РАССЫЛКИ ----------
 class BroadcastState(StatesGroup):
     waiting_text = State()
     waiting_confirm = State()
- 
- 
+
+
 # ---------- ВСПОМОГАТЕЛЬНОЕ ----------
 def get_bonus_text_and_type() -> tuple[str, str]:
     """Днём в будни (10:00-17:00 по Ташкенту) - усиленный бонус, в остальное время - обычный."""
@@ -364,17 +364,17 @@ def get_bonus_text_and_type() -> tuple[str, str]:
     if is_weekday and is_daytime:
         return DAYTIME_BONUS_TEXT, "daytime"
     return BONUS_TEXT, "welcome"
- 
- 
+
+
 def get_referral_link(telegram_id: int) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=ref{telegram_id}"
- 
- 
+
+
 # ---------- ОБРАБОТЧИКИ: ГОСТИ ----------
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject) -> None:
     user_id = message.from_user.id
- 
+
     # разбираем реферальную ссылку /start ref123456789
     if command.args and command.args.startswith("ref"):
         try:
@@ -383,11 +383,11 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
                 PENDING_REFERRALS[user_id] = referrer_id
         except ValueError:
             pass
- 
+
     if db_is_subscriber(user_id):
         await message.answer("Ты уже с нами! 🎮 Вот меню:", reply_markup=MAIN_MENU_KB)
         return
- 
+
     kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="📱 Отправить номер телефона", request_contact=True)]],
         resize_keyboard=True,
@@ -398,8 +398,8 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
         "Поделись номером телефона, чтобы получить бонус и не пропускать акции.",
         reply_markup=kb,
     )
- 
- 
+
+
 @router.message(F.contact)
 async def handle_contact(message: Message) -> None:
     user_id = message.from_user.id
@@ -408,9 +408,9 @@ async def handle_contact(message: Message) -> None:
     if contact.user_id and contact.user_id != user_id:
         await message.answer("Пожалуйста, отправь именно свой номер телефона 🙂")
         return
- 
+
     referrer_id = PENDING_REFERRALS.pop(user_id, None)
- 
+
     db_add_subscriber(
         telegram_id=user_id,
         username=message.from_user.username or "",
@@ -418,11 +418,11 @@ async def handle_contact(message: Message) -> None:
         phone=contact.phone_number,
         referred_by=referrer_id,
     )
- 
+
     bonus_text, bonus_type = get_bonus_text_and_type()
     code = db_create_bonus(user_id, bonus_type)
     bonus_text = f"{bonus_text}\n\n🔑 Код бонуса: {code}"
- 
+
     if referrer_id:
         bonus_text += REFERRED_EXTRA_TEXT
         try:
@@ -432,10 +432,10 @@ async def handle_contact(message: Message) -> None:
             )
         except Exception:
             logging.warning("не удалось уведомить пригласившего %s", referrer_id)
- 
+
     await message.answer(bonus_text, reply_markup=MAIN_MENU_KB)
- 
- 
+
+
 @router.message(Command("stop"))
 async def cmd_stop(message: Message) -> None:
     db_remove_subscriber(message.from_user.id)
@@ -443,8 +443,8 @@ async def cmd_stop(message: Message) -> None:
         "Ты отписан(а) от рассылки. Если захочешь вернуться — просто нажми /start.",
         reply_markup=ReplyKeyboardRemove(),
     )
- 
- 
+
+
 # ---------- МЕНЮ ----------
 @router.message(F.text == "💰 Баланс")
 async def menu_balance(message: Message) -> None:
@@ -452,8 +452,8 @@ async def menu_balance(message: Message) -> None:
         "Бот пока не подключён к кассовой системе клуба, поэтому точный баланс "
         "не покажет 🙏\nУзнать баланс можно у администратора на стойке."
     )
- 
- 
+
+
 PROMO_SUBMENU_KB = InlineKeyboardMarkup(
     inline_keyboard=[
         [InlineKeyboardButton(text="🔥 Выгодные пакеты", callback_data="promo_packages")],
@@ -461,53 +461,53 @@ PROMO_SUBMENU_KB = InlineKeyboardMarkup(
         [InlineKeyboardButton(text="🎁 Все акции", callback_data="promo_general")],
     ]
 )
- 
- 
+
+
 @router.message(F.text == "🎉 Акции")
 async def menu_promo(message: Message) -> None:
     await message.answer("Выбери, что интересно:", reply_markup=PROMO_SUBMENU_KB)
- 
- 
+
+
 async def send_image_folder_or_text(chat_id: int, folder: str, caption_text: str) -> None:
     images = []
     if os.path.isdir(folder):
         for name in sorted(os.listdir(folder)):
             if name.lower().endswith((".jpg", ".jpeg", ".png")):
                 images.append(os.path.join(folder, name))
- 
+
     if not images:
         await bot.send_message(chat_id, caption_text)
         return
- 
+
     if len(images) == 1:
         await bot.send_photo(chat_id, FSInputFile(images[0]), caption=caption_text)
         return
- 
+
     media = [
         InputMediaPhoto(media=FSInputFile(path), caption=caption_text if i == 0 else None)
         for i, path in enumerate(images)
     ]
     await bot.send_media_group(chat_id, media)
- 
- 
+
+
 @router.callback_query(F.data == "promo_packages")
 async def cb_promo_packages(callback: CallbackQuery) -> None:
     await callback.answer()
     await send_image_folder_or_text(callback.message.chat.id, PACKAGES_DIR, PACKAGES_TEXT)
- 
- 
+
+
 @router.callback_query(F.data == "promo_hookah")
 async def cb_promo_hookah(callback: CallbackQuery) -> None:
     await callback.answer()
     await send_image_folder_or_text(callback.message.chat.id, HOOKAH_DIR, HOOKAH_TEXT)
- 
- 
+
+
 @router.callback_query(F.data == "promo_general")
 async def cb_promo_general(callback: CallbackQuery) -> None:
     await callback.answer()
     await send_image_folder_or_text(callback.message.chat.id, PROMOS_DIR, PROMO_TEXT)
- 
- 
+
+
 @router.message(F.text == "📍 Клуб")
 async def menu_club(message: Message) -> None:
     await message.answer(
@@ -522,8 +522,8 @@ async def menu_club(message: Message) -> None:
             )
         except ValueError:
             logging.warning("некорректные CLUB_LATITUDE/CLUB_LONGITUDE")
- 
- 
+
+
 @router.message(F.text == "🧾 Прайс")
 async def menu_price(message: Message) -> None:
     photo_path = os.path.join(os.path.dirname(__file__), "price.jpg")
@@ -531,8 +531,8 @@ async def menu_price(message: Message) -> None:
         await message.answer("Прайс временно недоступен, уточните у администратора 🙏")
         return
     await message.answer_photo(FSInputFile(photo_path), caption="Актуальный прайс-лист 🧾")
- 
- 
+
+
 @router.message(F.text == "👥 Пригласить друга")
 @router.message(Command("invite"))
 async def menu_invite(message: Message) -> None:
@@ -548,8 +548,8 @@ async def menu_invite(message: Message) -> None:
         f"Приглашено друзей: {count}\n\n"
         "Когда друг перейдёт по ссылке и поделится номером — вы оба получите бонус."
     )
- 
- 
+
+
 @router.message(F.text == "✅ Я в клубе")
 async def menu_checkin(message: Message) -> None:
     user_id = message.from_user.id
@@ -562,19 +562,19 @@ async def menu_checkin(message: Message) -> None:
         f"🔑 Код: {code}\n\n"
         "Так мы отслеживаем твои визиты для статуса постоянного гостя 🏆"
     )
- 
- 
+
+
 @router.message(F.text == "💎 Мой статус")
 async def menu_status(message: Message) -> None:
     user_id = message.from_user.id
     if not db_is_subscriber(user_id):
         await message.answer("Сначала подпишись через /start 🙂")
         return
- 
+
     visits = db_get_visits(user_id)
     tier = db_get_tier(user_id)
     tier_label = TIER_LABELS.get(tier, tier)
- 
+
     if tier == "gold":
         progress = "Ты уже на максимальном статусе — так держать! 🏆"
     elif tier == "silver":
@@ -583,52 +583,52 @@ async def menu_status(message: Message) -> None:
     else:
         left = max(TIER_SILVER_VISITS - visits, 0)
         progress = f"До статуса 🥈 Серебряный осталось визитов: {left}"
- 
+
     await message.answer(
         f"💎 Твой статус: {tier_label}\n"
         f"Подтверждённых визитов: {visits}\n\n"
         f"{progress}\n\n"
         "Визит засчитывается, когда администратор гасит твой код из кнопки «✅ Я в клубе»."
     )
- 
- 
+
+
 # ---------- ОБРАБОТЧИКИ: АДМИН ----------
 def is_admin(telegram_id: int) -> bool:
     return telegram_id in ADMIN_IDS
- 
- 
+
+
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
     if not is_admin(message.from_user.id):
         return
     await message.answer(f"Подписчиков в базе: {db_count()}")
- 
- 
+
+
 @router.message(Command("redeem"))
 async def cmd_redeem(message: Message, command: CommandObject) -> None:
     if not is_admin(message.from_user.id):
         return
- 
+
     code = (command.args or "").strip().upper()
     if not code:
         await message.answer("Использование: /redeem КОД\n(код гость показывает из своего бонусного сообщения)")
         return
- 
+
     status, row = db_redeem_bonus(code, message.from_user.id)
- 
+
     if status == "not_found":
         await message.answer("❌ Код не найден. Проверьте, правильно ли он введён.")
         return
- 
+
     if status == "already_used":
         used_at = row["used_at"][:16].replace("T", " ")
         label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
         await message.answer(f"⚠️ Этот код уже был погашен {used_at}.\nТип бонуса: {label}")
         return
- 
+
     label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
     reply = f"✅ Бонус активирован!\nТип: {label}\nID гостя: {row['telegram_id']}"
- 
+
     if row["bonus_type"] == "checkin":
         guest_id = row["telegram_id"]
         visits = db_increment_visits(guest_id)
@@ -638,9 +638,9 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
             new_tier = "gold"
         elif visits >= TIER_SILVER_VISITS and current_tier not in ("silver", "gold"):
             new_tier = "silver"
- 
+
         reply += f"\nВизитов у гостя: {visits}"
- 
+
         if new_tier:
             db_set_tier(guest_id, new_tier)
             tier_text = TIER_GOLD_TEXT if new_tier == "gold" else TIER_SILVER_TEXT
@@ -650,10 +650,10 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
             except Exception:
                 logging.warning("не удалось уведомить гостя %s о новом статусе", guest_id)
             reply += f"\n🎉 Гость получил новый статус: {TIER_LABELS.get(new_tier, new_tier)}!"
- 
+
     await message.answer(reply)
- 
- 
+
+
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
@@ -663,16 +663,16 @@ async def cmd_broadcast(message: Message, state: FSMContext) -> None:
         "Чтобы отменить — напиши /cancel"
     )
     await state.set_state(BroadcastState.waiting_text)
- 
- 
+
+
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         return
     await state.clear()
     await message.answer("Рассылка отменена.")
- 
- 
+
+
 @router.message(BroadcastState.waiting_text)
 async def broadcast_get_text(message: Message, state: FSMContext) -> None:
     await state.update_data(text=message.html_text)
@@ -683,18 +683,18 @@ async def broadcast_get_text(message: Message, state: FSMContext) -> None:
         f"Отправляем? Напиши ДА для отправки или /cancel для отмены.",
     )
     await state.set_state(BroadcastState.waiting_confirm)
- 
- 
+
+
 @router.message(BroadcastState.waiting_confirm, F.text.upper() == "ДА")
 async def broadcast_confirm(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = data["text"]
     await state.clear()
- 
+
     ids = db_all_subscriber_ids()
     sent, failed = 0, 0
     status_msg = await message.answer(f"Начинаю рассылку на {len(ids)} чел...")
- 
+
     for tg_id in ids:
         try:
             await bot.send_message(tg_id, text)
@@ -704,15 +704,15 @@ async def broadcast_confirm(message: Message, state: FSMContext) -> None:
             # если бот заблокирован пользователем - удаляем из базы
             db_remove_subscriber(tg_id)
         await asyncio.sleep(0.05)  # не превышать лимиты Telegram
- 
+
     await status_msg.edit_text(f"Готово ✅\nОтправлено: {sent}\nНе доставлено (удалены из базы): {failed}")
- 
- 
+
+
 @router.message(BroadcastState.waiting_confirm)
 async def broadcast_wrong_answer(message: Message) -> None:
     await message.answer("Напиши ДА для отправки или /cancel для отмены.")
- 
- 
+
+
 # ---------- ФОНОВАЯ ЗАДАЧА: НАПОМИНАНИЕ ЧЕРЕЗ N ДНЕЙ ПОСЛЕ ПОДПИСКИ ----------
 async def reminder_loop() -> None:
     while True:
@@ -728,14 +728,14 @@ async def reminder_loop() -> None:
         except Exception:
             logging.exception("ошибка в reminder_loop")
         await asyncio.sleep(3600)  # проверяем раз в час
- 
- 
+
+
 # ---------- ЗАПУСК ----------
 async def main() -> None:
     db_init()
     asyncio.create_task(reminder_loop())
     await dp.start_polling(bot)
- 
- 
+
+
 if __name__ == "__main__":
     asyncio.run(main())
