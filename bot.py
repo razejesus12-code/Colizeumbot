@@ -15,7 +15,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
+    CallbackQuery,
     Contact,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -63,13 +68,29 @@ REMINDER_DELAY_DAYS = int(os.environ.get("REMINDER_DELAY_DAYS", "3"))
 CLUB_ADDRESS = os.environ.get("CLUB_ADDRESS", "уточняется — впишите адрес в переменную CLUB_ADDRESS")
 CLUB_PHONE = os.environ.get("CLUB_PHONE", "уточняется — впишите телефон в переменную CLUB_PHONE")
 CLUB_HOURS = os.environ.get("CLUB_HOURS", "уточняется — впишите часы работы в переменную CLUB_HOURS")
+CLUB_LATITUDE = os.environ.get("CLUB_LATITUDE", "")
+CLUB_LONGITUDE = os.environ.get("CLUB_LONGITUDE", "")
 PROMO_TEXT = os.environ.get(
     "PROMO_TEXT",
     "Актуальные акции скоро появятся здесь 🎉\nСледи за обновлениями в этом чате.",
 )
+PACKAGES_TEXT = os.environ.get(
+    "PACKAGES_TEXT",
+    "🔥 Выгодные пакеты\n\n"
+    "☀️ Standard (ROG периферия):\n"
+    "🕗 Утро 3 часа (08:00-11:00) — 25 000 UZS\n"
+    "🕚 День 3 часа (11:00-15:00) — 35 000 UZS\n\n"
+    "🎮 Bootcamp (LOGITECH периферия, 5 игровых мест):\n"
+    "🕗 Утренний пакет 3 часа — 35 000 UZS\n"
+    "🕚 Дневной пакет 3 часа — 50 000 UZS\n\n"
+    "Полный прайс по всем залам — кнопка 🧾 Прайс",
+)
  
 DB_PATH = os.environ.get("DB_PATH", "subscribers.db")
 TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROMOS_DIR = os.path.join(BASE_DIR, "promos")
+PACKAGES_DIR = os.path.join(BASE_DIR, "packages")
  
 logging.basicConfig(level=logging.INFO)
  
@@ -86,6 +107,7 @@ MAIN_MENU_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="🎉 Акции")],
         [KeyboardButton(text="📍 Клуб"), KeyboardButton(text="👥 Пригласить друга")],
+        [KeyboardButton(text="🧾 Прайс")],
     ],
     resize_keyboard=True,
 )
@@ -289,9 +311,51 @@ async def menu_balance(message: Message) -> None:
     )
  
  
+PROMO_SUBMENU_KB = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="🔥 Выгодные пакеты", callback_data="promo_packages")],
+        [InlineKeyboardButton(text="🎁 Все акции", callback_data="promo_general")],
+    ]
+)
+ 
+ 
 @router.message(F.text == "🎉 Акции")
 async def menu_promo(message: Message) -> None:
-    await message.answer(PROMO_TEXT)
+    await message.answer("Выбери, что интересно:", reply_markup=PROMO_SUBMENU_KB)
+ 
+ 
+async def send_image_folder_or_text(chat_id: int, folder: str, caption_text: str) -> None:
+    images = []
+    if os.path.isdir(folder):
+        for name in sorted(os.listdir(folder)):
+            if name.lower().endswith((".jpg", ".jpeg", ".png")):
+                images.append(os.path.join(folder, name))
+ 
+    if not images:
+        await bot.send_message(chat_id, caption_text)
+        return
+ 
+    if len(images) == 1:
+        await bot.send_photo(chat_id, FSInputFile(images[0]), caption=caption_text)
+        return
+ 
+    media = [
+        InputMediaPhoto(media=FSInputFile(path), caption=caption_text if i == 0 else None)
+        for i, path in enumerate(images)
+    ]
+    await bot.send_media_group(chat_id, media)
+ 
+ 
+@router.callback_query(F.data == "promo_packages")
+async def cb_promo_packages(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await send_image_folder_or_text(callback.message.chat.id, PACKAGES_DIR, PACKAGES_TEXT)
+ 
+ 
+@router.callback_query(F.data == "promo_general")
+async def cb_promo_general(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await send_image_folder_or_text(callback.message.chat.id, PROMOS_DIR, PROMO_TEXT)
  
  
 @router.message(F.text == "📍 Клуб")
@@ -301,6 +365,22 @@ async def menu_club(message: Message) -> None:
         f"📞 Телефон: {CLUB_PHONE}\n"
         f"🕒 Часы работы: {CLUB_HOURS}"
     )
+    if CLUB_LATITUDE and CLUB_LONGITUDE:
+        try:
+            await message.answer_location(
+                latitude=float(CLUB_LATITUDE), longitude=float(CLUB_LONGITUDE)
+            )
+        except ValueError:
+            logging.warning("некорректные CLUB_LATITUDE/CLUB_LONGITUDE")
+ 
+ 
+@router.message(F.text == "🧾 Прайс")
+async def menu_price(message: Message) -> None:
+    photo_path = os.path.join(os.path.dirname(__file__), "price.jpg")
+    if not os.path.exists(photo_path):
+        await message.answer("Прайс временно недоступен, уточните у администратора 🙏")
+        return
+    await message.answer_photo(FSInputFile(photo_path), caption="Актуальный прайс-лист 🧾")
  
  
 @router.message(F.text == "👥 Пригласить друга")
@@ -416,3 +496,4 @@ async def main() -> None:
  
 if __name__ == "__main__":
     asyncio.run(main())
+ 
