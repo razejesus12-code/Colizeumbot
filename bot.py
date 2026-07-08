@@ -143,15 +143,20 @@ TIER_GOLD_TEXT = os.environ.get(
 )
 TIER_LABELS = {"": "Без статуса", "silver": "🥈 Серебряный", "gold": "🥇 Золотой"}
 
-REVIEW_DELAY_HOURS = int(os.environ.get("REVIEW_DELAY_HOURS", "2"))
+FEEDBACK_DELAY_HOURS = int(os.environ.get("FEEDBACK_DELAY_HOURS", "2"))
+FEEDBACK_PROMPT_TEXT = os.environ.get(
+    "FEEDBACK_PROMPT_TEXT",
+    "Как прошёл твой визит сегодня? 🎮\n"
+    "Будем рады короткой оценке от 1 до 5 — это помогает нам стать лучше.",
+)
+
 REVIEW_LINK_2GIS = os.environ.get("REVIEW_LINK_2GIS", "")
 REVIEW_LINK_GOOGLE = os.environ.get("REVIEW_LINK_GOOGLE", "")
 REVIEW_LINK_YANDEX = os.environ.get("REVIEW_LINK_YANDEX", "")
 REVIEW_PROMPT_TEXT = os.environ.get(
     "REVIEW_PROMPT_TEXT",
-    "Спасибо, что заглянул к нам! 🙌\n\n"
-    "Если понравилось — оставь короткий отзыв, это правда помогает клубу.\n"
-    "После отзыва нажми кнопку ниже и получи бонус 🎁",
+    "Оставь отзыв о клубе на любой площадке — получи бонус! 🎁\n"
+    "После того как оставишь отзыв, нажми кнопку ниже.",
 )
 REVIEW_BONUS_TEXT = os.environ.get(
     "REVIEW_BONUS_TEXT",
@@ -404,7 +409,7 @@ def db_set_first_checkin(telegram_id: int) -> None:
     conn.close()
 
 
-def db_due_for_review(delay_hours: int) -> list[int]:
+def db_due_for_feedback(delay_hours: int) -> list[int]:
     cutoff = (datetime.now() - timedelta(hours=delay_hours)).isoformat()
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
@@ -416,7 +421,7 @@ def db_due_for_review(delay_hours: int) -> list[int]:
     return [r[0] for r in rows]
 
 
-def db_mark_review_prompted(telegram_id: int) -> None:
+def db_mark_feedback_prompted(telegram_id: int) -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "UPDATE subscribers SET review_prompted = 1 WHERE telegram_id = ?", (telegram_id,)
@@ -563,7 +568,14 @@ PROMO_SUBMENU_KB = InlineKeyboardMarkup(
     inline_keyboard=[
         [InlineKeyboardButton(text="🔥 Выгодные пакеты", callback_data="promo_packages")],
         [InlineKeyboardButton(text="💨 Кальян", callback_data="promo_hookah")],
+        [InlineKeyboardButton(text="⭐ Отзыв за бонус", callback_data="promo_review")],
         [InlineKeyboardButton(text="🎁 Все акции", callback_data="promo_general")],
+    ]
+)
+
+FEEDBACK_KB = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text=str(i), callback_data=f"feedback_{i}") for i in range(1, 6)]
     ]
 )
 
@@ -605,6 +617,12 @@ async def cb_promo_packages(callback: CallbackQuery) -> None:
 async def cb_promo_hookah(callback: CallbackQuery) -> None:
     await callback.answer()
     await send_image_folder_or_text(callback.message.chat.id, HOOKAH_DIR, HOOKAH_TEXT)
+
+
+@router.callback_query(F.data == "promo_review")
+async def cb_promo_review(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(REVIEW_PROMPT_TEXT, reply_markup=REVIEW_KB)
 
 
 @router.callback_query(F.data == "promo_general")
@@ -877,6 +895,29 @@ async def cb_review_done(callback: CallbackQuery) -> None:
     await callback.message.answer(f"{REVIEW_BONUS_TEXT}\n\n🔑 Код бонуса: {code}")
 
 
+@router.callback_query(F.data.startswith("feedback_"))
+async def cb_feedback(callback: CallbackQuery) -> None:
+    await callback.answer("Спасибо за оценку! 🙌")
+    rating = callback.data.split("_", 1)[1]
+    user = callback.from_user
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"📝 Оценка визита: {rating}/5\nГость: {user.full_name} (id {user.id})",
+            )
+        except Exception:
+            logging.warning("не удалось переслать оценку админу %s", admin_id)
+
+    await callback.message.answer("Спасибо, что поделился впечатлением! 🙏")
+
+
 # ---------- ФОНОВАЯ ЗАДАЧА: НАПОМИНАНИЕ ЧЕРЕЗ N ДНЕЙ ПОСЛЕ ПОДПИСКИ ----------
 async def reminder_loop() -> None:
     while True:
@@ -894,18 +935,18 @@ async def reminder_loop() -> None:
         await asyncio.sleep(3600)  # проверяем раз в час
 
 
-async def review_loop() -> None:
+async def feedback_loop() -> None:
     while True:
         try:
-            for tg_id in db_due_for_review(REVIEW_DELAY_HOURS):
+            for tg_id in db_due_for_feedback(FEEDBACK_DELAY_HOURS):
                 try:
-                    await bot.send_message(tg_id, REVIEW_PROMPT_TEXT, reply_markup=REVIEW_KB)
+                    await bot.send_message(tg_id, FEEDBACK_PROMPT_TEXT, reply_markup=FEEDBACK_KB)
                 except Exception:
-                    logging.warning("не удалось отправить запрос отзыва %s", tg_id)
-                db_mark_review_prompted(tg_id)
+                    logging.warning("не удалось отправить запрос обратной связи %s", tg_id)
+                db_mark_feedback_prompted(tg_id)
                 await asyncio.sleep(0.1)
         except Exception:
-            logging.exception("ошибка в review_loop")
+            logging.exception("ошибка в feedback_loop")
         await asyncio.sleep(3600)  # проверяем раз в час
 
 
@@ -913,7 +954,7 @@ async def review_loop() -> None:
 async def main() -> None:
     db_init()
     asyncio.create_task(reminder_loop())
-    asyncio.create_task(review_loop())
+    asyncio.create_task(feedback_loop())
     await dp.start_polling(bot)
 
 
