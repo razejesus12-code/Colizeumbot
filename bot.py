@@ -110,7 +110,25 @@ BONUS_LABELS = {
     "daytime": "Усиленный дневной бонус",
     "referrer": "Бонус за приглашённого друга",
     "reminder": "Бонус на возвращение",
+    "checkin": "Отметка визита",
+    "tier_silver": "Бонус за статус Серебряный",
+    "tier_gold": "Бонус за статус Золотой",
 }
+ 
+TIER_SILVER_VISITS = int(os.environ.get("TIER_SILVER_VISITS", "5"))
+TIER_GOLD_VISITS = int(os.environ.get("TIER_GOLD_VISITS", "15"))
+TIER_SILVER_TEXT = os.environ.get(
+    "TIER_SILVER_TEXT",
+    "🥈 Поздравляем, ты получил статус Серебряный гость!\n"
+    "Бонус: +15% к следующему пополнению баланса.",
+)
+TIER_GOLD_TEXT = os.environ.get(
+    "TIER_GOLD_TEXT",
+    "🥇 Поздравляем, ты получил статус Золотой гость!\n"
+    "Бонус: +25% к следующему пополнению баланса.\n"
+    "Плюс приоритет на бронирование любимого места.",
+)
+TIER_LABELS = {"": "Без статуса", "silver": "🥈 Серебряный", "gold": "🥇 Золотой"}
  
 logging.basicConfig(level=logging.INFO)
  
@@ -127,7 +145,8 @@ MAIN_MENU_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="🎉 Акции")],
         [KeyboardButton(text="📍 Клуб"), KeyboardButton(text="👥 Пригласить друга")],
-        [KeyboardButton(text="🧾 Прайс")],
+        [KeyboardButton(text="🧾 Прайс"), KeyboardButton(text="✅ Я в клубе")],
+        [KeyboardButton(text="💎 Мой статус")],
     ],
     resize_keyboard=True,
 )
@@ -162,7 +181,12 @@ def db_init() -> None:
         """
     )
     # на случай, если база создавалась ещё старой версией бота - аккуратно добавляем колонки
-    for column, coltype in (("referred_by", "INTEGER"), ("reminder_sent", "INTEGER DEFAULT 0")):
+    for column, coltype in (
+        ("referred_by", "INTEGER"),
+        ("reminder_sent", "INTEGER DEFAULT 0"),
+        ("visits_confirmed", "INTEGER DEFAULT 0"),
+        ("tier", "TEXT DEFAULT ''"),
+    ):
         try:
             conn.execute(f"ALTER TABLE subscribers ADD COLUMN {column} {coltype}")
         except sqlite3.OperationalError:
@@ -284,6 +308,45 @@ def db_redeem_bonus(code: str, admin_id: int) -> tuple[str, dict | None]:
     updated = conn.execute("SELECT * FROM bonuses WHERE code = ?", (code,)).fetchone()
     conn.close()
     return "ok", dict(updated)
+ 
+ 
+def db_get_visits(telegram_id: int) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT visits_confirmed FROM subscribers WHERE telegram_id = ?", (telegram_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] is not None else 0
+ 
+ 
+def db_get_tier(telegram_id: int) -> str:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT tier FROM subscribers WHERE telegram_id = ?", (telegram_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else ""
+ 
+ 
+def db_increment_visits(telegram_id: int) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE subscribers SET visits_confirmed = visits_confirmed + 1 WHERE telegram_id = ?",
+        (telegram_id,),
+    )
+    conn.commit()
+    new_count = conn.execute(
+        "SELECT visits_confirmed FROM subscribers WHERE telegram_id = ?", (telegram_id,)
+    ).fetchone()[0]
+    conn.close()
+    return new_count
+ 
+ 
+def db_set_tier(telegram_id: int, tier: str) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE subscribers SET tier = ? WHERE telegram_id = ?", (tier, telegram_id))
+    conn.commit()
+    conn.close()
  
  
 # ---------- СОСТОЯНИЯ ДЛЯ РАССЫЛКИ ----------
@@ -487,6 +550,48 @@ async def menu_invite(message: Message) -> None:
     )
  
  
+@router.message(F.text == "✅ Я в клубе")
+async def menu_checkin(message: Message) -> None:
+    user_id = message.from_user.id
+    if not db_is_subscriber(user_id):
+        await message.answer("Сначала подпишись через /start 🙂")
+        return
+    code = db_create_bonus(user_id, "checkin")
+    await message.answer(
+        "Покажи этот код администратору, чтобы засчитать визит 📍\n\n"
+        f"🔑 Код: {code}\n\n"
+        "Так мы отслеживаем твои визиты для статуса постоянного гостя 🏆"
+    )
+ 
+ 
+@router.message(F.text == "💎 Мой статус")
+async def menu_status(message: Message) -> None:
+    user_id = message.from_user.id
+    if not db_is_subscriber(user_id):
+        await message.answer("Сначала подпишись через /start 🙂")
+        return
+ 
+    visits = db_get_visits(user_id)
+    tier = db_get_tier(user_id)
+    tier_label = TIER_LABELS.get(tier, tier)
+ 
+    if tier == "gold":
+        progress = "Ты уже на максимальном статусе — так держать! 🏆"
+    elif tier == "silver":
+        left = max(TIER_GOLD_VISITS - visits, 0)
+        progress = f"До статуса 🥇 Золотой осталось визитов: {left}"
+    else:
+        left = max(TIER_SILVER_VISITS - visits, 0)
+        progress = f"До статуса 🥈 Серебряный осталось визитов: {left}"
+ 
+    await message.answer(
+        f"💎 Твой статус: {tier_label}\n"
+        f"Подтверждённых визитов: {visits}\n\n"
+        f"{progress}\n\n"
+        "Визит засчитывается, когда администратор гасит твой код из кнопки «✅ Я в клубе»."
+    )
+ 
+ 
 # ---------- ОБРАБОТЧИКИ: АДМИН ----------
 def is_admin(telegram_id: int) -> bool:
     return telegram_id in ADMIN_IDS
@@ -522,7 +627,31 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
         return
  
     label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
-    await message.answer(f"✅ Бонус активирован!\nТип: {label}\nID гостя: {row['telegram_id']}")
+    reply = f"✅ Бонус активирован!\nТип: {label}\nID гостя: {row['telegram_id']}"
+ 
+    if row["bonus_type"] == "checkin":
+        guest_id = row["telegram_id"]
+        visits = db_increment_visits(guest_id)
+        current_tier = db_get_tier(guest_id)
+        new_tier = None
+        if visits >= TIER_GOLD_VISITS and current_tier != "gold":
+            new_tier = "gold"
+        elif visits >= TIER_SILVER_VISITS and current_tier not in ("silver", "gold"):
+            new_tier = "silver"
+ 
+        reply += f"\nВизитов у гостя: {visits}"
+ 
+        if new_tier:
+            db_set_tier(guest_id, new_tier)
+            tier_text = TIER_GOLD_TEXT if new_tier == "gold" else TIER_SILVER_TEXT
+            tier_code = db_create_bonus(guest_id, f"tier_{new_tier}")
+            try:
+                await bot.send_message(guest_id, f"{tier_text}\n\n🔑 Код бонуса: {tier_code}")
+            except Exception:
+                logging.warning("не удалось уведомить гостя %s о новом статусе", guest_id)
+            reply += f"\n🎉 Гость получил новый статус: {TIER_LABELS.get(new_tier, new_tier)}!"
+ 
+    await message.answer(reply)
  
  
 @router.message(Command("broadcast"))
