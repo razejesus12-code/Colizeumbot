@@ -85,12 +85,20 @@ PACKAGES_TEXT = os.environ.get(
     "🕚 Дневной пакет 3 часа (11:00-15:00) — 50 000 UZS\n\n"
     "Полный прайс по всем залам — кнопка 🧾 Прайс",
 )
+HOOKAH_TEXT = os.environ.get(
+    "HOOKAH_TEXT",
+    "💨 Кальян в нашем клубе\n\n"
+    "Будни до 17:00 — 180 000 UZS\n"
+    "Будни после 17:00 — 200 000 UZS\n"
+    "Выходные — 200 000 UZS",
+)
  
 DB_PATH = os.environ.get("DB_PATH", "subscribers.db")
 TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMOS_DIR = os.path.join(BASE_DIR, "promos")
 PACKAGES_DIR = os.path.join(BASE_DIR, "packages")
+HOOKAH_DIR = os.path.join(BASE_DIR, "hookah")
  
 logging.basicConfig(level=logging.INFO)
  
@@ -314,6 +322,7 @@ async def menu_balance(message: Message) -> None:
 PROMO_SUBMENU_KB = InlineKeyboardMarkup(
     inline_keyboard=[
         [InlineKeyboardButton(text="🔥 Выгодные пакеты", callback_data="promo_packages")],
+        [InlineKeyboardButton(text="💨 Кальян", callback_data="promo_hookah")],
         [InlineKeyboardButton(text="🎁 Все акции", callback_data="promo_general")],
     ]
 )
@@ -350,6 +359,12 @@ async def send_image_folder_or_text(chat_id: int, folder: str, caption_text: str
 async def cb_promo_packages(callback: CallbackQuery) -> None:
     await callback.answer()
     await send_image_folder_or_text(callback.message.chat.id, PACKAGES_DIR, PACKAGES_TEXT)
+ 
+ 
+@router.callback_query(F.data == "promo_hookah")
+async def cb_promo_hookah(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await send_image_folder_or_text(callback.message.chat.id, HOOKAH_DIR, HOOKAH_TEXT)
  
  
 @router.callback_query(F.data == "promo_general")
