@@ -116,6 +116,18 @@ BONUS_LABELS = {
     "review": "Бонус за отзыв",
 }
 
+# проценты, которые администратор должен начислить на пополнение при погашении кода
+# (checkin намеренно не включён - это просто счётчик визита, без денежного бонуса)
+BONUS_PERCENTS = {
+    "welcome": os.environ.get("BONUS_PERCENT_WELCOME", "20"),
+    "daytime": os.environ.get("BONUS_PERCENT_DAYTIME", "30"),
+    "referrer": os.environ.get("BONUS_PERCENT_REFERRER", "30"),
+    "reminder": os.environ.get("BONUS_PERCENT_REMINDER", "20"),
+    "tier_silver": os.environ.get("BONUS_PERCENT_TIER_SILVER", "15"),
+    "tier_gold": os.environ.get("BONUS_PERCENT_TIER_GOLD", "25"),
+    "review": os.environ.get("BONUS_PERCENT_REVIEW", "10"),
+}
+
 TIER_SILVER_VISITS = int(os.environ.get("TIER_SILVER_VISITS", "10"))
 TIER_GOLD_VISITS = int(os.environ.get("TIER_GOLD_VISITS", "25"))
 TIER_SILVER_TEXT = os.environ.get(
@@ -716,11 +728,21 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
     if status == "already_used":
         used_at = row["used_at"][:16].replace("T", " ")
         label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
-        await message.answer(f"⚠️ Этот код уже был погашен {used_at}.\nТип бонуса: {label}")
+        percent = BONUS_PERCENTS.get(row["bonus_type"])
+        amount_line = f"\nБонус: +{percent}% к пополнению" if percent else ""
+        await message.answer(
+            f"⚠️ Этот код уже был погашен {used_at}.\nТип бонуса: {label}{amount_line}"
+        )
         return
 
     label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
-    reply = f"✅ Бонус активирован!\nТип: {label}\nID гостя: {row['telegram_id']}"
+
+    if row["bonus_type"] == "checkin":
+        reply = f"✅ Визит подтверждён (без денежного бонуса)\nID гостя: {row['telegram_id']}"
+    else:
+        percent = BONUS_PERCENTS.get(row["bonus_type"])
+        amount_line = f"\n💰 Начислить бонус: +{percent}% к пополнению" if percent else ""
+        reply = f"✅ Бонус активирован!\nТип: {label}{amount_line}\nID гостя: {row['telegram_id']}"
 
     if row["bonus_type"] == "checkin":
         guest_id = row["telegram_id"]
