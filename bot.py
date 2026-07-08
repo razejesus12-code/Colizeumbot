@@ -113,19 +113,24 @@ BONUS_LABELS = {
     "checkin": "Отметка визита",
     "tier_silver": "Бонус за статус Серебряный",
     "tier_gold": "Бонус за статус Золотой",
-    "review": "Бонус за отзыв",
+    "review_no_photo": "Отзыв без фото",
+    "review_photo": "Отзыв с фото",
 }
 
-# проценты, которые администратор должен начислить на пополнение при погашении кода
-# (checkin намеренно не включён - это просто счётчик визита, без денежного бонуса)
-BONUS_PERCENTS = {
-    "welcome": os.environ.get("BONUS_PERCENT_WELCOME", "20"),
-    "daytime": os.environ.get("BONUS_PERCENT_DAYTIME", "30"),
-    "referrer": os.environ.get("BONUS_PERCENT_REFERRER", "30"),
-    "reminder": os.environ.get("BONUS_PERCENT_REMINDER", "20"),
-    "tier_silver": os.environ.get("BONUS_PERCENT_TIER_SILVER", "15"),
-    "tier_gold": os.environ.get("BONUS_PERCENT_TIER_GOLD", "25"),
-    "review": os.environ.get("BONUS_PERCENT_REVIEW", "10"),
+REVIEW_POINTS_NO_PHOTO = os.environ.get("REVIEW_POINTS_NO_PHOTO", "15 000")
+REVIEW_POINTS_PHOTO = os.environ.get("REVIEW_POINTS_PHOTO", "25 000")
+
+# что администратор должен начислить гостю при погашении кода
+# (checkin намеренно не включён - это просто счётчик визита, без начисления)
+BONUS_AMOUNTS = {
+    "welcome": f"+{os.environ.get('BONUS_PERCENT_WELCOME', '20')}% к пополнению",
+    "daytime": f"+{os.environ.get('BONUS_PERCENT_DAYTIME', '30')}% к пополнению",
+    "referrer": f"+{os.environ.get('BONUS_PERCENT_REFERRER', '30')}% к пополнению",
+    "reminder": f"+{os.environ.get('BONUS_PERCENT_REMINDER', '20')}% к пополнению",
+    "tier_silver": f"+{os.environ.get('BONUS_PERCENT_TIER_SILVER', '15')}% к пополнению",
+    "tier_gold": f"+{os.environ.get('BONUS_PERCENT_TIER_GOLD', '25')}% к пополнению",
+    "review_no_photo": f"{REVIEW_POINTS_NO_PHOTO} баллов на баланс",
+    "review_photo": f"{REVIEW_POINTS_PHOTO} баллов на баланс",
 }
 
 TIER_SILVER_VISITS = int(os.environ.get("TIER_SILVER_VISITS", "10"))
@@ -155,12 +160,10 @@ REVIEW_LINK_GOOGLE = os.environ.get("REVIEW_LINK_GOOGLE", "")
 REVIEW_LINK_YANDEX = os.environ.get("REVIEW_LINK_YANDEX", "")
 REVIEW_PROMPT_TEXT = os.environ.get(
     "REVIEW_PROMPT_TEXT",
-    "Оставь отзыв о клубе на любой площадке — получи бонус! 🎁\n"
-    "После того как оставишь отзыв, нажми кнопку ниже.",
-)
-REVIEW_BONUS_TEXT = os.environ.get(
-    "REVIEW_BONUS_TEXT",
-    "🙏 Спасибо за отзыв!\nБонус: +10% к следующему пополнению баланса.",
+    "Оставь отзыв — получи баллы на баланс! 🎁\n\n"
+    f"📝 Без фото — {REVIEW_POINTS_NO_PHOTO} баллов\n"
+    f"📸 С фото (интерьеры клуба или ты в клубе) — {REVIEW_POINTS_PHOTO} баллов\n\n"
+    "После того как оставишь отзыв, выбери ниже, какой именно ты оставил:",
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -195,7 +198,12 @@ if REVIEW_LINK_YANDEX:
     _review_buttons.append(
         [InlineKeyboardButton(text="🟡 Оставить отзыв в Яндекс Картах", url=REVIEW_LINK_YANDEX)]
     )
-_review_buttons.append([InlineKeyboardButton(text="✅ Я оставил отзыв", callback_data="review_done")])
+_review_buttons.append(
+    [InlineKeyboardButton(text=f"✅ Без фото ({REVIEW_POINTS_NO_PHOTO})", callback_data="review_done_no_photo")]
+)
+_review_buttons.append(
+    [InlineKeyboardButton(text=f"✅ С фото ({REVIEW_POINTS_PHOTO})", callback_data="review_done_photo")]
+)
 REVIEW_KB = InlineKeyboardMarkup(inline_keyboard=_review_buttons)
 
 
@@ -463,6 +471,10 @@ def db_list_by_tier(tier: str) -> list[dict]:
 class BroadcastState(StatesGroup):
     waiting_text = State()
     waiting_confirm = State()
+
+
+class ReviewState(StatesGroup):
+    waiting_screenshot = State()
 
 
 # ---------- ВСПОМОГАТЕЛЬНОЕ ----------
@@ -746,8 +758,8 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
     if status == "already_used":
         used_at = row["used_at"][:16].replace("T", " ")
         label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
-        percent = BONUS_PERCENTS.get(row["bonus_type"])
-        amount_line = f"\nБонус: +{percent}% к пополнению" if percent else ""
+        amount = BONUS_AMOUNTS.get(row["bonus_type"])
+        amount_line = f"\nБонус: {amount}" if amount else ""
         await message.answer(
             f"⚠️ Этот код уже был погашен {used_at}.\nТип бонуса: {label}{amount_line}"
         )
@@ -758,8 +770,8 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
     if row["bonus_type"] == "checkin":
         reply = f"✅ Визит подтверждён (без денежного бонуса)\nID гостя: {row['telegram_id']}"
     else:
-        percent = BONUS_PERCENTS.get(row["bonus_type"])
-        amount_line = f"\n💰 Начислить бонус: +{percent}% к пополнению" if percent else ""
+        amount = BONUS_AMOUNTS.get(row["bonus_type"])
+        amount_line = f"\n💰 Начислить: {amount}" if amount else ""
         reply = f"✅ Бонус активирован!\nТип: {label}{amount_line}\nID гостя: {row['telegram_id']}"
 
     if row["bonus_type"] == "checkin":
@@ -883,16 +895,64 @@ async def broadcast_wrong_answer(message: Message) -> None:
     await message.answer("Напиши ДА для отправки или /cancel для отмены.")
 
 
-@router.callback_query(F.data == "review_done")
-async def cb_review_done(callback: CallbackQuery) -> None:
+@router.callback_query(F.data.in_({"review_done_no_photo", "review_done_photo"}))
+async def cb_review_done(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     user_id = callback.from_user.id
     if db_has_review_claimed(user_id):
         await callback.message.answer("Бонус за отзыв уже был выдан раньше, спасибо ещё раз! 🙏")
         return
+
+    bonus_type = "review_photo" if callback.data == "review_done_photo" else "review_no_photo"
+    await state.update_data(review_bonus_type=bonus_type)
+    await state.set_state(ReviewState.waiting_screenshot)
+    await callback.message.answer(
+        "Пришли, пожалуйста, скриншот своего отзыва (просто фото экрана с отзывом) — "
+        "и я сразу выдам код бонуса. Это нужно, чтобы администратор мог сверить отзыв.\n\n"
+        "Передумал? Напиши /cancel"
+    )
+
+
+@router.message(ReviewState.waiting_screenshot, F.photo)
+async def review_screenshot_received(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    bonus_type = data.get("review_bonus_type", "review_no_photo")
+    await state.clear()
+
+    user_id = message.from_user.id
+    if db_has_review_claimed(user_id):
+        await message.answer("Бонус за отзыв уже был выдан раньше, спасибо ещё раз! 🙏")
+        return
+
     db_mark_review_claimed(user_id)
-    code = db_create_bonus(user_id, "review")
-    await callback.message.answer(f"{REVIEW_BONUS_TEXT}\n\n🔑 Код бонуса: {code}")
+    code = db_create_bonus(user_id, bonus_type)
+    amount = BONUS_AMOUNTS.get(bonus_type, "")
+    await message.answer(f"🙏 Спасибо за отзыв!\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
+
+    label = BONUS_LABELS.get(bonus_type, bonus_type)
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_photo(
+                admin_id,
+                message.photo[-1].file_id,
+                caption=(
+                    f"📸 Скриншот отзыва от {message.from_user.full_name} (id {user_id})\n"
+                    f"Тип: {label}\nКод: {code}"
+                ),
+            )
+        except Exception:
+            logging.warning("не удалось переслать скриншот отзыва админу %s", admin_id)
+
+
+@router.message(ReviewState.waiting_screenshot)
+async def review_screenshot_wrong(message: Message, state: FSMContext) -> None:
+    if (message.text or "").strip().lower() == "/cancel":
+        await state.clear()
+        await message.answer("Отменено.")
+        return
+    await message.answer(
+        "Пожалуйста, пришли именно скриншот (фото) своего отзыва 🙏\nИли напиши /cancel, чтобы отменить."
+    )
 
 
 @router.callback_query(F.data.startswith("feedback_"))
