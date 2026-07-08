@@ -113,6 +113,7 @@ BONUS_LABELS = {
     "checkin": "Отметка визита",
     "tier_silver": "Бонус за статус Серебряный",
     "tier_gold": "Бонус за статус Золотой",
+    "review": "Бонус за отзыв",
 }
 
 TIER_SILVER_VISITS = int(os.environ.get("TIER_SILVER_VISITS", "10"))
@@ -129,6 +130,20 @@ TIER_GOLD_TEXT = os.environ.get(
     "Плюс приоритет на бронирование любимого места.",
 )
 TIER_LABELS = {"": "Без статуса", "silver": "🥈 Серебряный", "gold": "🥇 Золотой"}
+
+REVIEW_DELAY_HOURS = int(os.environ.get("REVIEW_DELAY_HOURS", "2"))
+REVIEW_LINK_2GIS = os.environ.get("REVIEW_LINK_2GIS", "")
+REVIEW_LINK_GOOGLE = os.environ.get("REVIEW_LINK_GOOGLE", "")
+REVIEW_PROMPT_TEXT = os.environ.get(
+    "REVIEW_PROMPT_TEXT",
+    "Спасибо, что заглянул к нам! 🙌\n\n"
+    "Если понравилось — оставь короткий отзыв, это правда помогает клубу.\n"
+    "После отзыва нажми кнопку ниже и получи бонус 🎁",
+)
+REVIEW_BONUS_TEXT = os.environ.get(
+    "REVIEW_BONUS_TEXT",
+    "🙏 Спасибо за отзыв!\nБонус: +10% к следующему пополнению баланса.",
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -150,6 +165,16 @@ MAIN_MENU_KB = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
 )
+
+_review_buttons = []
+if REVIEW_LINK_2GIS:
+    _review_buttons.append([InlineKeyboardButton(text="📍 Оставить отзыв в 2GIS", url=REVIEW_LINK_2GIS)])
+if REVIEW_LINK_GOOGLE:
+    _review_buttons.append(
+        [InlineKeyboardButton(text="🗺 Оставить отзыв в Google Maps", url=REVIEW_LINK_GOOGLE)]
+    )
+_review_buttons.append([InlineKeyboardButton(text="✅ Я оставил отзыв", callback_data="review_done")])
+REVIEW_KB = InlineKeyboardMarkup(inline_keyboard=_review_buttons)
 
 
 # ---------- БАЗА ДАННЫХ ----------
@@ -186,6 +211,9 @@ def db_init() -> None:
         ("reminder_sent", "INTEGER DEFAULT 0"),
         ("visits_confirmed", "INTEGER DEFAULT 0"),
         ("tier", "TEXT DEFAULT ''"),
+        ("first_checkin_at", "TEXT"),
+        ("review_prompted", "INTEGER DEFAULT 0"),
+        ("review_bonus_claimed", "INTEGER DEFAULT 0"),
     ):
         try:
             conn.execute(f"ALTER TABLE subscribers ADD COLUMN {column} {coltype}")
@@ -345,6 +373,55 @@ def db_increment_visits(telegram_id: int) -> int:
 def db_set_tier(telegram_id: int, tier: str) -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.execute("UPDATE subscribers SET tier = ? WHERE telegram_id = ?", (tier, telegram_id))
+    conn.commit()
+    conn.close()
+
+
+def db_set_first_checkin(telegram_id: int) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE subscribers SET first_checkin_at = ? WHERE telegram_id = ? AND first_checkin_at IS NULL",
+        (datetime.now().isoformat(), telegram_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_due_for_review(delay_hours: int) -> list[int]:
+    cutoff = (datetime.now() - timedelta(hours=delay_hours)).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT telegram_id FROM subscribers "
+        "WHERE review_prompted = 0 AND first_checkin_at IS NOT NULL AND first_checkin_at <= ?",
+        (cutoff,),
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def db_mark_review_prompted(telegram_id: int) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE subscribers SET review_prompted = 1 WHERE telegram_id = ?", (telegram_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_has_review_claimed(telegram_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT review_bonus_claimed FROM subscribers WHERE telegram_id = ?", (telegram_id,)
+    ).fetchone()
+    conn.close()
+    return bool(row and row[0])
+
+
+def db_mark_review_claimed(telegram_id: int) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE subscribers SET review_bonus_claimed = 1 WHERE telegram_id = ?", (telegram_id,)
+    )
     conn.commit()
     conn.close()
 
@@ -643,6 +720,8 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
     if row["bonus_type"] == "checkin":
         guest_id = row["telegram_id"]
         visits = db_increment_visits(guest_id)
+        if visits == 1:
+            db_set_first_checkin(guest_id)
         current_tier = db_get_tier(guest_id)
         new_tier = None
         if visits >= TIER_GOLD_VISITS and current_tier != "gold":
@@ -759,6 +838,18 @@ async def broadcast_wrong_answer(message: Message) -> None:
     await message.answer("Напиши ДА для отправки или /cancel для отмены.")
 
 
+@router.callback_query(F.data == "review_done")
+async def cb_review_done(callback: CallbackQuery) -> None:
+    await callback.answer()
+    user_id = callback.from_user.id
+    if db_has_review_claimed(user_id):
+        await callback.message.answer("Бонус за отзыв уже был выдан раньше, спасибо ещё раз! 🙏")
+        return
+    db_mark_review_claimed(user_id)
+    code = db_create_bonus(user_id, "review")
+    await callback.message.answer(f"{REVIEW_BONUS_TEXT}\n\n🔑 Код бонуса: {code}")
+
+
 # ---------- ФОНОВАЯ ЗАДАЧА: НАПОМИНАНИЕ ЧЕРЕЗ N ДНЕЙ ПОСЛЕ ПОДПИСКИ ----------
 async def reminder_loop() -> None:
     while True:
@@ -776,10 +867,26 @@ async def reminder_loop() -> None:
         await asyncio.sleep(3600)  # проверяем раз в час
 
 
+async def review_loop() -> None:
+    while True:
+        try:
+            for tg_id in db_due_for_review(REVIEW_DELAY_HOURS):
+                try:
+                    await bot.send_message(tg_id, REVIEW_PROMPT_TEXT, reply_markup=REVIEW_KB)
+                except Exception:
+                    logging.warning("не удалось отправить запрос отзыва %s", tg_id)
+                db_mark_review_prompted(tg_id)
+                await asyncio.sleep(0.1)
+        except Exception:
+            logging.exception("ошибка в review_loop")
+        await asyncio.sleep(3600)  # проверяем раз в час
+
+
 # ---------- ЗАПУСК ----------
 async def main() -> None:
     db_init()
     asyncio.create_task(reminder_loop())
+    asyncio.create_task(review_loop())
     await dp.start_polling(bot)
 
 
