@@ -349,6 +349,17 @@ def db_set_tier(telegram_id: int, tier: str) -> None:
     conn.close()
 
 
+def db_list_by_tier(tier: str) -> list[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT telegram_id, phone, full_name, visits_confirmed FROM subscribers WHERE tier = ? ORDER BY visits_confirmed DESC",
+        (tier,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 # ---------- СОСТОЯНИЯ ДЛЯ РАССЫЛКИ ----------
 class BroadcastState(StatesGroup):
     waiting_text = State()
@@ -651,7 +662,42 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
                 logging.warning("не удалось уведомить гостя %s о новом статусе", guest_id)
             reply += f"\n🎉 Гость получил новый статус: {TIER_LABELS.get(new_tier, new_tier)}!"
 
+            if new_tier == "gold":
+                conn = sqlite3.connect(DB_PATH)
+                phone_row = conn.execute(
+                    "SELECT phone, full_name FROM subscribers WHERE telegram_id = ?", (guest_id,)
+                ).fetchone()
+                conn.close()
+                phone = phone_row[0] if phone_row else "неизвестен"
+                name = phone_row[1] if phone_row else ""
+                for admin_id in ADMIN_IDS:
+                    try:
+                        await bot.send_message(
+                            admin_id,
+                            "🥇 Новый Золотой гость!\n\n"
+                            f"Имя: {name}\nТелефон: {phone}\n\n"
+                            "Не забудьте вручную проставить постоянную скидку 10% в CRM клуба "
+                            "(бот не имеет доступа к CRM и не может сделать это сам).",
+                        )
+                    except Exception:
+                        logging.warning("не удалось уведомить админа %s", admin_id)
+
     await message.answer(reply)
+
+
+@router.message(Command("vip"))
+async def cmd_vip(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    gold = db_list_by_tier("gold")
+    if not gold:
+        await message.answer("Пока нет гостей с золотым статусом.")
+        return
+    lines = ["🥇 Золотые гости (для проставления скидки 10% в CRM):\n"]
+    for g in gold:
+        name = g["full_name"] or "без имени"
+        lines.append(f"• {name} — {g['phone']} ({g['visits_confirmed']} визитов)")
+    await message.answer("\n".join(lines))
 
 
 @router.message(Command("broadcast"))
