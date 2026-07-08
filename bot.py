@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import os
+import random
 import sqlite3
+import string
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
  
@@ -100,6 +102,16 @@ PROMOS_DIR = os.path.join(BASE_DIR, "promos")
 PACKAGES_DIR = os.path.join(BASE_DIR, "packages")
 HOOKAH_DIR = os.path.join(BASE_DIR, "hookah")
  
+# буквы/цифры без похожих друг на друга символов (0/O, 1/I/L), чтобы код было легко читать вслух
+CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+ 
+BONUS_LABELS = {
+    "welcome": "Бонус за подписку",
+    "daytime": "Усиленный дневной бонус",
+    "referrer": "Бонус за приглашённого друга",
+    "reminder": "Бонус на возвращение",
+}
+ 
 logging.basicConfig(level=logging.INFO)
  
 bot = Bot(token=BOT_TOKEN)
@@ -134,6 +146,18 @@ def db_init() -> None:
             joined_at TEXT,
             referred_by INTEGER,
             reminder_sent INTEGER DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bonuses (
+            code TEXT PRIMARY KEY,
+            telegram_id INTEGER,
+            bonus_type TEXT,
+            created_at TEXT,
+            used_at TEXT,
+            used_by_admin INTEGER
         )
         """
     )
@@ -222,6 +246,46 @@ def db_mark_reminder_sent(telegram_id: int) -> None:
     conn.close()
  
  
+def db_create_bonus(telegram_id: int, bonus_type: str) -> str:
+    conn = sqlite3.connect(DB_PATH)
+    while True:
+        code = "".join(random.choices(CODE_ALPHABET, k=6))
+        exists = conn.execute("SELECT 1 FROM bonuses WHERE code = ?", (code,)).fetchone()
+        if not exists:
+            break
+    conn.execute(
+        "INSERT INTO bonuses (code, telegram_id, bonus_type, created_at) VALUES (?, ?, ?, ?)",
+        (code, telegram_id, bonus_type, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return code
+ 
+ 
+def db_redeem_bonus(code: str, admin_id: int) -> tuple[str, dict | None]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM bonuses WHERE code = ?", (code,)).fetchone()
+ 
+    if row is None:
+        conn.close()
+        return "not_found", None
+ 
+    if row["used_at"]:
+        result = dict(row)
+        conn.close()
+        return "already_used", result
+ 
+    conn.execute(
+        "UPDATE bonuses SET used_at = ?, used_by_admin = ? WHERE code = ?",
+        (datetime.now().isoformat(), admin_id, code),
+    )
+    conn.commit()
+    updated = conn.execute("SELECT * FROM bonuses WHERE code = ?", (code,)).fetchone()
+    conn.close()
+    return "ok", dict(updated)
+ 
+ 
 # ---------- СОСТОЯНИЯ ДЛЯ РАССЫЛКИ ----------
 class BroadcastState(StatesGroup):
     waiting_text = State()
@@ -229,12 +293,14 @@ class BroadcastState(StatesGroup):
  
  
 # ---------- ВСПОМОГАТЕЛЬНОЕ ----------
-def get_bonus_text() -> str:
+def get_bonus_text_and_type() -> tuple[str, str]:
     """Днём в будни (10:00-17:00 по Ташкенту) - усиленный бонус, в остальное время - обычный."""
     now = datetime.now(TASHKENT_TZ)
     is_weekday = now.weekday() < 5  # 0=Пн ... 4=Пт
     is_daytime = 10 <= now.hour < 17
-    return DAYTIME_BONUS_TEXT if (is_weekday and is_daytime) else BONUS_TEXT
+    if is_weekday and is_daytime:
+        return DAYTIME_BONUS_TEXT, "daytime"
+    return BONUS_TEXT, "welcome"
  
  
 def get_referral_link(telegram_id: int) -> str:
@@ -290,11 +356,17 @@ async def handle_contact(message: Message) -> None:
         referred_by=referrer_id,
     )
  
-    bonus_text = get_bonus_text()
+    bonus_text, bonus_type = get_bonus_text_and_type()
+    code = db_create_bonus(user_id, bonus_type)
+    bonus_text = f"{bonus_text}\n\n🔑 Код бонуса: {code}"
+ 
     if referrer_id:
         bonus_text += REFERRED_EXTRA_TEXT
         try:
-            await bot.send_message(referrer_id, REFERRER_BONUS_TEXT)
+            referrer_code = db_create_bonus(referrer_id, "referrer")
+            await bot.send_message(
+                referrer_id, f"{REFERRER_BONUS_TEXT}\n\n🔑 Код бонуса: {referrer_code}"
+            )
         except Exception:
             logging.warning("не удалось уведомить пригласившего %s", referrer_id)
  
@@ -427,6 +499,32 @@ async def cmd_stats(message: Message) -> None:
     await message.answer(f"Подписчиков в базе: {db_count()}")
  
  
+@router.message(Command("redeem"))
+async def cmd_redeem(message: Message, command: CommandObject) -> None:
+    if not is_admin(message.from_user.id):
+        return
+ 
+    code = (command.args or "").strip().upper()
+    if not code:
+        await message.answer("Использование: /redeem КОД\n(код гость показывает из своего бонусного сообщения)")
+        return
+ 
+    status, row = db_redeem_bonus(code, message.from_user.id)
+ 
+    if status == "not_found":
+        await message.answer("❌ Код не найден. Проверьте, правильно ли он введён.")
+        return
+ 
+    if status == "already_used":
+        used_at = row["used_at"][:16].replace("T", " ")
+        label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
+        await message.answer(f"⚠️ Этот код уже был погашен {used_at}.\nТип бонуса: {label}")
+        return
+ 
+    label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
+    await message.answer(f"✅ Бонус активирован!\nТип: {label}\nID гостя: {row['telegram_id']}")
+ 
+ 
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
@@ -492,7 +590,8 @@ async def reminder_loop() -> None:
         try:
             for tg_id in db_due_for_reminder(REMINDER_DELAY_DAYS):
                 try:
-                    await bot.send_message(tg_id, REMINDER_TEXT)
+                    code = db_create_bonus(tg_id, "reminder")
+                    await bot.send_message(tg_id, f"{REMINDER_TEXT}\n\n🔑 Код бонуса: {code}")
                 except Exception:
                     logging.warning("не удалось отправить напоминание %s", tg_id)
                 db_mark_reminder_sent(tg_id)
