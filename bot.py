@@ -134,6 +134,7 @@ TIER_LABELS = {"": "Без статуса", "silver": "🥈 Серебряный
 REVIEW_DELAY_HOURS = int(os.environ.get("REVIEW_DELAY_HOURS", "2"))
 REVIEW_LINK_2GIS = os.environ.get("REVIEW_LINK_2GIS", "")
 REVIEW_LINK_GOOGLE = os.environ.get("REVIEW_LINK_GOOGLE", "")
+REVIEW_LINK_YANDEX = os.environ.get("REVIEW_LINK_YANDEX", "")
 REVIEW_PROMPT_TEXT = os.environ.get(
     "REVIEW_PROMPT_TEXT",
     "Спасибо, что заглянул к нам! 🙌\n\n"
@@ -172,6 +173,10 @@ if REVIEW_LINK_2GIS:
 if REVIEW_LINK_GOOGLE:
     _review_buttons.append(
         [InlineKeyboardButton(text="🗺 Оставить отзыв в Google Maps", url=REVIEW_LINK_GOOGLE)]
+    )
+if REVIEW_LINK_YANDEX:
+    _review_buttons.append(
+        [InlineKeyboardButton(text="🟡 Оставить отзыв в Яндекс Картах", url=REVIEW_LINK_YANDEX)]
     )
 _review_buttons.append([InlineKeyboardButton(text="✅ Я оставил отзыв", callback_data="review_done")])
 REVIEW_KB = InlineKeyboardMarkup(inline_keyboard=_review_buttons)
