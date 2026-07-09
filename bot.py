@@ -106,7 +106,7 @@ HOOKAH_TEXT = os.environ.get(
     "Выходные — 200 000 UZS",
 )
 
-DB_PATH = os.environ.get("DB_PATH", "subscribers.db")
+DB_PATH = os.environ.get("DB_PATH", "/data/subscribers.db")
 TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMOS_DIR = os.path.join(BASE_DIR, "promos")
