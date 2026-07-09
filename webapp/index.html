@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -236,7 +235,9 @@
 
   async function checkStatus() {
     if (!initData) {
-      statusText.textContent = "Открой это через кнопку в боте, не напрямую в браузере.";
+      const platform = tg ? (tg.platform || "?") : "нет tg";
+      const version = tg ? (tg.version || "?") : "?";
+      statusText.textContent = `Открой это через кнопку в боте, не напрямую в браузере. [debug: tg=${!!tg}, platform=${platform}, ver=${version}, initDataLen=${initData.length}]`;
       spinBtn.textContent = "Недоступно";
       return;
     }
@@ -247,7 +248,7 @@
         if (data.error === "not_subscribed") {
           statusText.textContent = "Сначала подпишись на бота через /start 🙂";
         } else {
-          statusText.textContent = "Не удалось проверить статус, попробуй позже.";
+          statusText.textContent = `Не удалось проверить статус (${data.error || res.status}), попробуй позже.`;
         }
         spinBtn.textContent = "Недоступно";
         return;
