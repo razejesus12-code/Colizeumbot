@@ -1,4 +1,6 @@
 import asyncio
+import csv
+import io
 import logging
 import os
 import random
@@ -17,6 +19,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
+    BufferedInputFile,
     CallbackQuery,
     Contact,
     FSInputFile,
@@ -489,6 +492,17 @@ def db_list_by_tier(tier: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def db_export_all() -> list[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT telegram_id, username, full_name, phone, joined_at, referred_by, "
+        "visits_confirmed, tier, review_bonus_claimed FROM subscribers ORDER BY joined_at"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 # ---------- СОСТОЯНИЯ ----------
 class BroadcastState(StatesGroup):
     waiting_text = State()
@@ -866,6 +880,46 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
                         logging.warning("не удалось уведомить админа %s", admin_id)
 
     await message.answer(reply)
+
+
+@router.message(Command("export"))
+async def cmd_export(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+
+    rows = db_export_all()
+    if not rows:
+        await message.answer("В базе пока нет подписчиков.")
+        return
+
+    tier_map = {"": "Без статуса", "silver": "Серебряный", "gold": "Золотой"}
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        ["Telegram ID", "Имя", "Телефон", "Юзернейм", "Дата регистрации", "Визитов", "Статус", "Отзыв оставлен", "Приглашён (ID)"]
+    )
+    for r in rows:
+        writer.writerow(
+            [
+                r["telegram_id"],
+                r["full_name"] or "",
+                r["phone"] or "",
+                r["username"] or "",
+                (r["joined_at"] or "")[:16].replace("T", " "),
+                r["visits_confirmed"] or 0,
+                tier_map.get(r["tier"] or "", r["tier"]),
+                "Да" if r["review_bonus_claimed"] else "Нет",
+                r["referred_by"] or "",
+            ]
+        )
+
+    csv_bytes = buffer.getvalue().encode("utf-8-sig")  # BOM, чтобы Excel правильно показал кириллицу
+    filename = f"colizeum_subscribers_{datetime.now(TASHKENT_TZ).date().isoformat()}.csv"
+    await message.answer_document(
+        BufferedInputFile(csv_bytes, filename=filename),
+        caption=f"Выгрузка подписчиков: {len(rows)} чел.",
+    )
 
 
 @router.message(Command("vip"))
