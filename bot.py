@@ -206,11 +206,7 @@ dp.include_router(router)
 # (живёт только пока бот не перезапущен - этого достаточно для короткого пути /start -> контакт)
 PENDING_REFERRALS: dict[int, int] = {}
 
-WHEEL_BUTTON = (
-    KeyboardButton(text="🎡 Колесо Фортуны", web_app=WebAppInfo(url=f"{WEBAPP_URL.rstrip('/')}/wheel"))
-    if WEBAPP_URL
-    else KeyboardButton(text="🎡 Колесо Фортуны")
-)
+WHEEL_BUTTON = KeyboardButton(text="🎡 Колесо Фортуны")
 
 MAIN_MENU_KB = ReplyKeyboardMarkup(
     keyboard=[
@@ -919,11 +915,24 @@ async def menu_status(message: Message) -> None:
 
 
 @router.message(F.text == "🎡 Колесо Фортуны")
-async def menu_wheel_not_configured(message: Message) -> None:
-    # срабатывает только если WEBAPP_URL ещё не настроен - иначе кнопка открывает Mini App напрямую
-    await message.answer(
-        "Колесо фортуны скоро заработает — администратор ещё настраивает эту функцию 🎡"
+async def menu_wheel(message: Message) -> None:
+    if not WEBAPP_URL:
+        await message.answer(
+            "Колесо фортуны скоро заработает — администратор ещё настраивает эту функцию 🎡"
+        )
+        return
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎡 Открыть колесо",
+                    web_app=WebAppInfo(url=f"{WEBAPP_URL.rstrip('/')}/wheel"),
+                )
+            ]
+        ]
     )
+    await message.answer("Крути колесо раз в день и лови бонус! 🎰", reply_markup=kb)
 
 
 # ---------- ОБРАБОТЧИКИ: АДМИН ----------
