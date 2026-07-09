@@ -1,14 +1,19 @@
 import asyncio
 import csv
+import hashlib
+import hmac
 import io
+import json
 import logging
 import os
 import random
 import sqlite3
 import string
 from datetime import datetime, timedelta
+from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo
 
+from aiohttp import web
 from dotenv import load_dotenv
 
 load_dotenv()  # если рядом есть файл .env — подхватит переменные из него (для локального теста)
@@ -30,6 +35,7 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    WebAppInfo,
 )
 
 # ---------- НАСТРОЙКИ (заполняются из переменных окружения) ----------
@@ -187,6 +193,7 @@ WINBACK_TEXT = os.environ.get(
     "Покажи это сообщение администратору на стойке в течение 7 дней.",
 )
 BACKUP_INTERVAL_DAYS = int(os.environ.get("BACKUP_INTERVAL_DAYS", "7"))
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "").strip()
 
 logging.basicConfig(level=logging.INFO)
 
@@ -199,12 +206,18 @@ dp.include_router(router)
 # (живёт только пока бот не перезапущен - этого достаточно для короткого пути /start -> контакт)
 PENDING_REFERRALS: dict[int, int] = {}
 
+WHEEL_BUTTON = (
+    KeyboardButton(text="🎡 Колесо Фортуны", web_app=WebAppInfo(url=f"{WEBAPP_URL.rstrip('/')}/wheel"))
+    if WEBAPP_URL
+    else KeyboardButton(text="🎡 Колесо Фортуны")
+)
+
 MAIN_MENU_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="🎉 Акции")],
         [KeyboardButton(text="📍 Клуб"), KeyboardButton(text="👥 Пригласить друга")],
         [KeyboardButton(text="🧾 Прайс"), KeyboardButton(text="✅ Я в клубе")],
-        [KeyboardButton(text="💎 Мой статус"), KeyboardButton(text="🎰 Лототрон")],
+        [KeyboardButton(text="💎 Мой статус"), WHEEL_BUTTON],
     ],
     resize_keyboard=True,
 )
@@ -905,33 +918,12 @@ async def menu_status(message: Message) -> None:
     )
 
 
-@router.message(F.text == "🎰 Лототрон")
-async def menu_lottery(message: Message) -> None:
-    user_id = message.from_user.id
-    if not db_is_subscriber(user_id):
-        await message.answer("Сначала подпишись через /start 🙂")
-        return
-
-    today = datetime.now(TASHKENT_TZ).date().isoformat()
-    if db_get_last_spin_date(user_id) == today:
-        await message.answer("Ты уже крутил барабан сегодня 🎰\nОдин спин в день — приходи завтра!")
-        return
-
-    db_set_last_spin_date(user_id, today)
-    dice_msg = await message.answer_dice(emoji="🎰")
-    value = dice_msg.dice.value
-    await asyncio.sleep(4)
-
-    if value == 64:
-        code = db_create_bonus(user_id, "lottery_jackpot")
-        amount = BONUS_AMOUNTS.get("lottery_jackpot")
-        await message.answer(f"🎉 ДЖЕКПОТ! 777 🎰\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
-    elif value in (1, 22, 43):
-        code = db_create_bonus(user_id, "lottery_win")
-        amount = BONUS_AMOUNTS.get("lottery_win")
-        await message.answer(f"🎉 Выигрыш! Три одинаковых символа!\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
-    else:
-        await message.answer("Почти! В этот раз не повезло 😅\nПриходи завтра, будет ещё один спин!")
+@router.message(F.text == "🎡 Колесо Фортуны")
+async def menu_wheel_not_configured(message: Message) -> None:
+    # срабатывает только если WEBAPP_URL ещё не настроен - иначе кнопка открывает Mini App напрямую
+    await message.answer(
+        "Колесо фортуны скоро заработает — администратор ещё настраивает эту функцию 🎡"
+    )
 
 
 # ---------- ОБРАБОТЧИКИ: АДМИН ----------
@@ -1345,6 +1337,118 @@ async def feedback_loop() -> None:
         await asyncio.sleep(3600)
 
 
+# ---------- MINI APP: КОЛЕСО ФОРТУНЫ ----------
+def verify_webapp_init_data(init_data: str) -> dict | None:
+    """Проверяет подпись данных, присланных Telegram Mini App, чтобы никто не мог
+    подделать чужой telegram_id и накрутить бонусы. Возвращает данные гостя или None."""
+    if not init_data:
+        return None
+    try:
+        parsed = dict(parse_qsl(init_data, strict_parsing=True))
+    except ValueError:
+        return None
+
+    received_hash = parsed.pop("hash", None)
+    if not received_hash:
+        return None
+
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
+    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+    computed_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(computed_hash, received_hash):
+        return None
+
+    user_json = parsed.get("user")
+    if not user_json:
+        return None
+    try:
+        return json.loads(user_json)
+    except json.JSONDecodeError:
+        return None
+
+
+# 8 секторов колеса (порядок важен - должен совпадать с версткой в webapp/index.html)
+WHEEL_SEGMENTS = [
+    {"index": 0, "type": "lose"},
+    {"index": 1, "type": "win"},
+    {"index": 2, "type": "lose"},
+    {"index": 3, "type": "win"},
+    {"index": 4, "type": "lose"},
+    {"index": 5, "type": "win"},
+    {"index": 6, "type": "lose"},
+    {"index": 7, "type": "jackpot"},
+]
+
+
+async def handle_wheel_page(request: web.Request) -> web.Response:
+    html_path = os.path.join(BASE_DIR, "webapp", "index.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
+    html = html.replace("{{WIN_POINTS}}", LOTTERY_WIN_POINTS).replace("{{JACKPOT_POINTS}}", LOTTERY_JACKPOT_POINTS)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_wheel_status(request: web.Request) -> web.Response:
+    init_data = request.query.get("initData", "")
+    user = verify_webapp_init_data(init_data)
+    if not user:
+        return web.json_response({"error": "invalid_auth"}, status=401)
+
+    user_id = user["id"]
+    if not db_is_subscriber(user_id):
+        return web.json_response({"error": "not_subscribed"}, status=403)
+
+    today = datetime.now(TASHKENT_TZ).date().isoformat()
+    can_spin = db_get_last_spin_date(user_id) != today
+    return web.json_response({"can_spin": can_spin})
+
+
+async def handle_wheel_spin(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "bad_request"}, status=400)
+
+    user = verify_webapp_init_data(body.get("initData", ""))
+    if not user:
+        return web.json_response({"error": "invalid_auth"}, status=401)
+
+    user_id = user["id"]
+    if not db_is_subscriber(user_id):
+        return web.json_response({"error": "not_subscribed"}, status=403)
+
+    today = datetime.now(TASHKENT_TZ).date().isoformat()
+    if db_get_last_spin_date(user_id) == today:
+        return web.json_response({"error": "already_spun"}, status=409)
+
+    db_set_last_spin_date(user_id, today)
+    chosen = random.choice(WHEEL_SEGMENTS)
+    result = {"segment_index": chosen["index"], "prize_type": chosen["type"]}
+
+    if chosen["type"] in ("win", "jackpot"):
+        bonus_type = "lottery_jackpot" if chosen["type"] == "jackpot" else "lottery_win"
+        code = db_create_bonus(user_id, bonus_type)
+        result["amount"] = BONUS_AMOUNTS.get(bonus_type)
+        result["code"] = code
+
+    return web.json_response(result)
+
+
+async def start_webapp_server() -> None:
+    app = web.Application()
+    app.router.add_get("/wheel", handle_wheel_page)
+    app.router.add_get("/wheel/status", handle_wheel_status)
+    app.router.add_post("/wheel/spin", handle_wheel_spin)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", "8080"))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info("Веб-сервер колеса фортуны запущен на порту %s", port)
+
+
 async def winback_loop() -> None:
     while True:
         try:
@@ -1425,6 +1529,7 @@ async def main() -> None:
     asyncio.create_task(feedback_loop())
     asyncio.create_task(winback_loop())
     asyncio.create_task(backup_loop())
+    await start_webapp_server()
     await dp.start_polling(bot)
 
 
