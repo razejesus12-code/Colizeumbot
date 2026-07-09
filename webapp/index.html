@@ -55,6 +55,7 @@
       linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
       linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
     background-size: 26px 26px;
+    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, #000 30%, transparent 75%);
     mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, #000 30%, transparent 75%);
   }
 
@@ -128,14 +129,14 @@
       0 10px 34px rgba(0,0,0,.65),
       inset 0 0 26px rgba(0,0,0,.55);
     background: conic-gradient(from 0deg,
-      var(--dark-seg) 0deg 45deg,
-      var(--dark-seg2) 45deg 90deg,
-      var(--win) 90deg 135deg,
-      var(--dark-seg) 135deg 180deg,
-      var(--dark-seg2) 180deg 225deg,
-      var(--dark-seg) 225deg 270deg,
-      var(--dark-seg2) 270deg 315deg,
-      var(--jackpot) 315deg 360deg
+      #17171b 0deg 45deg,
+      #1f1f24 45deg 90deg,
+      #f5c518 90deg 135deg,
+      #17171b 135deg 180deg,
+      #1f1f24 180deg 225deg,
+      #17171b 225deg 270deg,
+      #1f1f24 270deg 315deg,
+      #e63946 315deg 360deg
     );
     transition: transform 4.2s cubic-bezier(0.15, 0.7, 0.1, 1);
   }
