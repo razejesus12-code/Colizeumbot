@@ -463,6 +463,15 @@ def db_mark_review_claimed(telegram_id: int) -> None:
     conn.close()
 
 
+def db_reset_review_claim(telegram_id: int) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE subscribers SET review_bonus_claimed = 0 WHERE telegram_id = ?", (telegram_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
 def db_get_last_spin_date(telegram_id: int) -> str | None:
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute(
@@ -541,8 +550,10 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
         one_time_keyboard=True,
     )
     await message.answer(
-        "Привет! Это бот клуба Colizeum. 🎮\n\n"
-        "Поделись номером телефона, чтобы получить бонус и не пропускать акции.",
+        "Привет! Это бот клуба Colizeum Tashkent City. 🎮\n\n"
+        "Номер телефона нужен только для того, чтобы начислять тебе бонусы "
+        "и не пропускать акции клуба — никуда, кроме нашей базы, он не передаётся.\n\n"
+        "Поделись номером, чтобы получить бонус:",
         reply_markup=kb,
     )
 
@@ -888,6 +899,22 @@ async def cmd_vip(message: Message) -> None:
         name = g["full_name"] or "без имени"
         lines.append(f"• {name} — {g['phone']} ({g['visits_confirmed']} визитов)")
     await message.answer("\n".join(lines))
+
+
+@router.message(Command("reset_review"))
+async def cmd_reset_review(message: Message, command: CommandObject) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    arg = (command.args or "").strip()
+    if not arg.isdigit():
+        await message.answer(
+            "Использование: /reset_review TELEGRAM_ID\n"
+            "(снимает отметку «бонус за отзыв уже получен» у гостя, чтобы он мог попробовать снова)"
+        )
+        return
+    telegram_id = int(arg)
+    db_reset_review_claim(telegram_id)
+    await message.answer(f"Готово ✅ Гость {telegram_id} снова может получить бонус за отзыв.")
 
 
 @router.message(Command("broadcast"))
