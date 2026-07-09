@@ -251,6 +251,11 @@ REVIEW_KB = InlineKeyboardMarkup(inline_keyboard=_review_buttons)
 # ---------- БАЗА ДАННЫХ ----------
 def db_init() -> None:
     conn = sqlite3.connect(DB_PATH)
+    # WAL вместо дефолтного rollback-journal — позволяет читать базу, пока кто-то
+    # другой пишет (важно при одновременных спинах/чек-инах/рассылке на много гостей).
+    # Настройка сохраняется в самом файле базы, достаточно выставить один раз.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS subscribers (
