@@ -1,1 +1,322 @@
 
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Colizeum — Колесо Фортуны</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #0d0d0d;
+    --gold: #f5c518;
+    --dark-seg: #1a1a1a;
+    --jackpot: #e63946;
+    --text: #ffffff;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow-x: hidden;
+  }
+
+  .wrap {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 20px 16px 32px;
+  }
+
+  .logo {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+  .logo span { color: var(--gold); }
+
+  .subtitle {
+    font-size: 13px;
+    color: #999;
+    margin-bottom: 24px;
+    text-align: center;
+  }
+
+  .wheel-outer {
+    position: relative;
+    width: min(320px, 82vw);
+    height: min(320px, 82vw);
+    margin: 8px 0 28px;
+  }
+
+  .pointer {
+    position: absolute;
+    top: -14px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 16px solid transparent;
+    border-right: 16px solid transparent;
+    border-top: 26px solid var(--gold);
+    z-index: 10;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,.5));
+  }
+
+  .wheel {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    position: relative;
+    border: 6px solid var(--gold);
+    box-shadow: 0 0 0 3px #000, 0 8px 30px rgba(0,0,0,.6);
+    background: conic-gradient(from 0deg,
+      var(--dark-seg) 0deg 45deg,
+      var(--gold) 45deg 90deg,
+      var(--dark-seg) 90deg 135deg,
+      var(--gold) 135deg 180deg,
+      var(--dark-seg) 180deg 225deg,
+      var(--gold) 225deg 270deg,
+      var(--dark-seg) 270deg 315deg,
+      var(--jackpot) 315deg 360deg
+    );
+    transition: transform 4s cubic-bezier(0.17, 0.67, 0.12, 0.99);
+  }
+
+  .wheel-center {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 54px; height: 54px;
+    transform: translate(-50%, -50%);
+    background: var(--bg);
+    border: 3px solid var(--gold);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    z-index: 5;
+  }
+
+  .seg-label {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0,0,0,.6);
+    white-space: nowrap;
+  }
+  .seg-label span {
+    display: inline-block;
+    transform: translate(-50%, -128px);
+  }
+
+  button#spinBtn {
+    background: var(--gold);
+    color: #000;
+    border: none;
+    border-radius: 14px;
+    padding: 14px 40px;
+    font-size: 17px;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(245,197,24,.35);
+    transition: transform .1s, opacity .2s;
+  }
+  button#spinBtn:active { transform: scale(0.96); }
+  button#spinBtn:disabled {
+    background: #444;
+    color: #888;
+    box-shadow: none;
+    cursor: default;
+  }
+
+  .status-text {
+    margin-top: 16px;
+    font-size: 14px;
+    color: #ccc;
+    text-align: center;
+    min-height: 20px;
+  }
+
+  .result-card {
+    display: none;
+    margin-top: 20px;
+    background: #161616;
+    border: 1px solid var(--gold);
+    border-radius: 16px;
+    padding: 20px;
+    text-align: center;
+    max-width: 320px;
+  }
+  .result-card.show { display: block; }
+  .result-title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
+  .result-amount { font-size: 16px; color: var(--gold); font-weight: 700; margin-bottom: 10px; }
+  .result-code {
+    font-family: monospace;
+    font-size: 20px;
+    letter-spacing: 2px;
+    background: #000;
+    border-radius: 8px;
+    padding: 8px 14px;
+    display: inline-block;
+  }
+  .result-hint { font-size: 12px; color: #999; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo">COLIZE<span>U</span>M</div>
+  <div class="subtitle">Колесо Фортуны — один спин в день</div>
+
+  <div class="wheel-outer">
+    <div class="pointer"></div>
+    <div class="wheel" id="wheel">
+      <div class="seg-label" style="transform: rotate(22.5deg)"><span>😔</span></div>
+      <div class="seg-label" style="transform: rotate(67.5deg)"><span>+{{WIN_POINTS}}</span></div>
+      <div class="seg-label" style="transform: rotate(112.5deg)"><span>😔</span></div>
+      <div class="seg-label" style="transform: rotate(157.5deg)"><span>+{{WIN_POINTS}}</span></div>
+      <div class="seg-label" style="transform: rotate(202.5deg)"><span>😔</span></div>
+      <div class="seg-label" style="transform: rotate(247.5deg)"><span>+{{WIN_POINTS}}</span></div>
+      <div class="seg-label" style="transform: rotate(292.5deg)"><span>😔</span></div>
+      <div class="seg-label" style="transform: rotate(337.5deg)"><span>🎉{{JACKPOT_POINTS}}</span></div>
+      <div class="wheel-center">🎮</div>
+    </div>
+  </div>
+
+  <button id="spinBtn" disabled>Загрузка...</button>
+  <div class="status-text" id="statusText"></div>
+
+  <div class="result-card" id="resultCard">
+    <div class="result-title" id="resultTitle"></div>
+    <div class="result-amount" id="resultAmount"></div>
+    <div class="result-code" id="resultCode"></div>
+    <div class="result-hint">Покажи это администратору на стойке</div>
+  </div>
+</div>
+
+<script>
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+  const initData = tg ? tg.initData : "";
+
+  const wheel = document.getElementById("wheel");
+  const spinBtn = document.getElementById("spinBtn");
+  const statusText = document.getElementById("statusText");
+  const resultCard = document.getElementById("resultCard");
+  const resultTitle = document.getElementById("resultTitle");
+  const resultAmount = document.getElementById("resultAmount");
+  const resultCode = document.getElementById("resultCode");
+
+  let currentRotation = 0;
+  let spinning = false;
+
+  function spinTo(segmentIndex) {
+    const segAngle = 45;
+    const targetCenter = segmentIndex * segAngle + segAngle / 2;
+    const currentMod = ((currentRotation % 360) + 360) % 360;
+    const desiredMod = (360 - targetCenter) % 360;
+    let delta = desiredMod - currentMod;
+    if (delta <= 0) delta += 360;
+    currentRotation += 5 * 360 + delta;
+    wheel.style.transform = `rotate(${currentRotation}deg)`;
+  }
+
+  async function checkStatus() {
+    if (!initData) {
+      statusText.textContent = "Открой это через кнопку в боте, не напрямую в браузере.";
+      spinBtn.textContent = "Недоступно";
+      return;
+    }
+    try {
+      const res = await fetch("/wheel/status?initData=" + encodeURIComponent(initData));
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.error === "not_subscribed") {
+          statusText.textContent = "Сначала подпишись на бота через /start 🙂";
+        } else {
+          statusText.textContent = "Не удалось проверить статус, попробуй позже.";
+        }
+        spinBtn.textContent = "Недоступно";
+        return;
+      }
+      if (data.can_spin) {
+        spinBtn.disabled = false;
+        spinBtn.textContent = "🎡 Крутить!";
+        statusText.textContent = "Один спин в день — не упусти шанс!";
+      } else {
+        spinBtn.disabled = true;
+        spinBtn.textContent = "Уже крутил сегодня";
+        statusText.textContent = "Приходи завтра за новой попыткой 🎰";
+      }
+    } catch (e) {
+      statusText.textContent = "Ошибка соединения. Попробуй ещё раз.";
+      spinBtn.textContent = "Недоступно";
+    }
+  }
+
+  spinBtn.addEventListener("click", async () => {
+    if (spinning) return;
+    spinning = true;
+    spinBtn.disabled = true;
+    resultCard.classList.remove("show");
+    statusText.textContent = "Крутим...";
+
+    try {
+      const res = await fetch("/wheel/spin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        statusText.textContent = data.error === "already_spun"
+          ? "Уже крутил сегодня, приходи завтра!"
+          : "Не получилось, попробуй позже.";
+        spinning = false;
+        return;
+      }
+
+      spinTo(data.segment_index);
+
+      setTimeout(() => {
+        spinning = false;
+        statusText.textContent = "";
+        if (data.prize_type === "lose") {
+          resultTitle.textContent = "Почти! Не повезло 😅";
+          resultAmount.textContent = "Приходи завтра — будет ещё один спин!";
+          resultCode.style.display = "none";
+        } else {
+          resultTitle.textContent = data.prize_type === "jackpot" ? "🎉 ДЖЕКПОТ!" : "🎉 Выигрыш!";
+          resultAmount.textContent = "Бонус: " + data.amount;
+          resultCode.style.display = "inline-block";
+          resultCode.textContent = data.code;
+          if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+        }
+        resultCard.classList.add("show");
+        spinBtn.textContent = "Уже крутил сегодня";
+      }, 4200);
+    } catch (e) {
+      statusText.textContent = "Ошибка соединения. Попробуй ещё раз.";
+      spinBtn.disabled = false;
+      spinning = false;
+    }
+  });
+
+  checkStatus();
+</script>
+</body>
+</html>
