@@ -36,34 +36,57 @@ ADMIN_IDS = {
     int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()
 }
 
-BONUS_TEXT = os.environ.get(
+
+def env_pair(base: str, default_ru: str, default_uz: str) -> dict[str, str]:
+    """Читает {base}_RU/{base}_UZ из переменных окружения. Для обратной совместимости
+    также проверяет старое имя {base} без суффикса как значение для русского."""
+    ru = os.environ.get(f"{base}_RU", os.environ.get(base, default_ru))
+    uz = os.environ.get(f"{base}_UZ", default_uz)
+    return {"ru": ru, "uz": uz}
+
+
+BONUS_TEXT = env_pair(
     "BONUS_TEXT",
     "Спасибо за подписку! 🎁\n\n"
     "Твой бонус: +20% к следующему пополнению баланса.\n"
     "Покажи это сообщение администратору на стойке в течение 7 дней.",
+    "Obuna uchun rahmat! 🎁\n\n"
+    "Bonusing: keyingi balans to'ldirishga +20%.\n"
+    "Ushbu xabarni administratorga peshtaxtada 7 kun ichida ko'rsat.",
 )
-DAYTIME_BONUS_TEXT = os.environ.get(
+DAYTIME_BONUS_TEXT = env_pair(
     "DAYTIME_BONUS_TEXT",
     "Спасибо за подписку! ☀️🎁\n\n"
     "Сейчас будний день — держи усиленный бонус: +30% к следующему пополнению баланса,\n"
     "если придёшь сегодня с 10:00 до 17:00.\n"
     "Покажи это сообщение администратору на стойке.",
+    "Obuna uchun rahmat! ☀️🎁\n\n"
+    "Hozir ish kuni — kuchaytirilgan bonusni ol: keyingi balans to'ldirishga +30%,\n"
+    "agar bugun soat 10:00 dan 17:00 gacha kelsang.\n"
+    "Ushbu xabarni administratorga peshtaxtada ko'rsat.",
 )
-REFERRER_BONUS_TEXT = os.environ.get(
+REFERRER_BONUS_TEXT = env_pair(
     "REFERRER_BONUS_TEXT",
     "Твой друг присоединился по твоей ссылке! 🙌\n"
     "Бонус тебе: +30% к следующему пополнению баланса.\n"
     "Покажи это сообщение администратору на стойке.",
+    "Do'sting sening havolang orqali qo'shildi! 🙌\n"
+    "Senga bonus: keyingi balans to'ldirishga +30%.\n"
+    "Ushbu xabarni administratorga peshtaxtada ko'rsat.",
 )
-REFERRED_EXTRA_TEXT = os.environ.get(
+REFERRED_EXTRA_TEXT = env_pair(
     "REFERRED_EXTRA_TEXT",
     "\n\n🙌 Ты пришёл по приглашению друга — держи ещё +10% сверху к бонусу выше!",
+    "\n\n🙌 Sen do'st taklifi bilan keldingiz — yuqoridagi bonusga yana +10% ustama!",
 )
-REMINDER_TEXT = os.environ.get(
+REMINDER_TEXT = env_pair(
     "REMINDER_TEXT",
     "Давно не виделись! 👋\n\n"
     "Держи бонус на возвращение: +20% к следующему пополнению баланса.\n"
     "Покажи это сообщение администратору на стойке в течение 5 дней.",
+    "Ancha ko'rishmadik! 👋\n\n"
+    "Qaytganing uchun bonus: keyingi balans to'ldirishga +20%.\n"
+    "Ushbu xabarni administratorga peshtaxtada 5 kun ichida ko'rsat.",
 )
 REMINDER_DELAY_DAYS = int(os.environ.get("REMINDER_DELAY_DAYS", "3"))
 
@@ -72,11 +95,13 @@ CLUB_PHONE = os.environ.get("CLUB_PHONE", "уточняется — впишит
 CLUB_HOURS = os.environ.get("CLUB_HOURS", "уточняется — впишите часы работы в переменную CLUB_HOURS")
 CLUB_LATITUDE = os.environ.get("CLUB_LATITUDE", "")
 CLUB_LONGITUDE = os.environ.get("CLUB_LONGITUDE", "")
-PROMO_TEXT = os.environ.get(
+
+PROMO_TEXT = env_pair(
     "PROMO_TEXT",
     "Актуальные акции скоро появятся здесь 🎉\nСледи за обновлениями в этом чате.",
+    "Dolzarb aksiyalar tez orada shu yerda paydo bo'ladi 🎉\nUshbu chatdagi yangilanishlarni kuzatib bor.",
 )
-PACKAGES_TEXT = os.environ.get(
+PACKAGES_TEXT = env_pair(
     "PACKAGES_TEXT",
     "🔥 Выгодные пакеты\n\n"
     "☀️ Standard (ROG периферия):\n"
@@ -86,13 +111,25 @@ PACKAGES_TEXT = os.environ.get(
     "🕗 Утренний пакет 3 часа (08:00-11:00) — 35 000 UZS\n"
     "🕚 Дневной пакет 3 часа (11:00-15:00) — 50 000 UZS\n\n"
     "Полный прайс по всем залам — кнопка 🧾 Прайс",
+    "🔥 Foydali paketlar\n\n"
+    "☀️ Standard (ROG periferiya):\n"
+    "🕗 Ertalabki 3 soat (08:00-11:00) — 25 000 UZS\n"
+    "🕚 Kunduzgi 3 soat (11:00-15:00) — 35 000 UZS\n\n"
+    "🎮 Bootcamp (LOGITECH periferiya, 5 o'yin joyi):\n"
+    "🕗 Ertalabki paket 3 soat (08:00-11:00) — 35 000 UZS\n"
+    "🕚 Kunduzgi paket 3 soat (11:00-15:00) — 50 000 UZS\n\n"
+    "Barcha zallar bo'yicha to'liq narxnoma — 🧾 Narxnoma tugmasi",
 )
-HOOKAH_TEXT = os.environ.get(
+HOOKAH_TEXT = env_pair(
     "HOOKAH_TEXT",
     "💨 Кальян в нашем клубе\n\n"
     "Будни до 17:00 — 180 000 UZS\n"
     "Будни после 17:00 — 200 000 UZS\n"
     "Выходные — 200 000 UZS",
+    "💨 Klubimizda kalyan\n\n"
+    "Ish kunlari 17:00 gacha — 180 000 UZS\n"
+    "Ish kunlari 17:00 dan keyin — 200 000 UZS\n"
+    "Dam olish kunlari — 200 000 UZS",
 )
 
 DB_PATH = os.environ.get("DB_PATH", "subscribers.db")
@@ -105,6 +142,7 @@ HOOKAH_DIR = os.path.join(BASE_DIR, "hookah")
 # буквы/цифры без похожих друг на друга символов (0/O, 1/I/L), чтобы код было легко читать вслух
 CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
+# ---------- админские подписи бонусов (всегда на русском - ими пользуются только админы) ----------
 BONUS_LABELS = {
     "welcome": "Бонус за подписку",
     "daytime": "Усиленный дневной бонус",
@@ -141,35 +179,50 @@ BONUS_AMOUNTS = {
 
 TIER_SILVER_VISITS = int(os.environ.get("TIER_SILVER_VISITS", "10"))
 TIER_GOLD_VISITS = int(os.environ.get("TIER_GOLD_VISITS", "25"))
-TIER_SILVER_TEXT = os.environ.get(
+TIER_SILVER_TEXT = env_pair(
     "TIER_SILVER_TEXT",
     "🥈 Поздравляем, ты получил статус Серебряный гость!\n"
     "Бонус: +15% к следующему пополнению баланса.",
+    "🥈 Tabriklaymiz, sen Kumush mehmon statusiga erishding!\n"
+    "Bonus: keyingi balans to'ldirishga +15%.",
 )
-TIER_GOLD_TEXT = os.environ.get(
+TIER_GOLD_TEXT = env_pair(
     "TIER_GOLD_TEXT",
     "🥇 Поздравляем, ты получил статус Золотой гость!\n"
     "Бонус: +25% к следующему пополнению баланса.\n"
     "Плюс приоритет на бронирование любимого места.",
+    "🥇 Tabriklaymiz, sen Oltin mehmon statusiga erishding!\n"
+    "Bonus: keyingi balans to'ldirishga +25%.\n"
+    "Qo'shimcha ravishda sevimli joyingizni band qilishda ustuvorlik.",
 )
-TIER_LABELS = {"": "Без статуса", "silver": "🥈 Серебряный", "gold": "🥇 Золотой"}
+TIER_LABELS = {"": "Без статуса", "silver": "🥈 Серебряный", "gold": "🥇 Золотой"}  # для админ /vip
+GUEST_TIER_LABELS = {
+    "ru": {"": "Без статуса", "silver": "🥈 Серебряный", "gold": "🥇 Золотой"},
+    "uz": {"": "Statussiz", "silver": "🥈 Kumush", "gold": "🥇 Oltin"},
+}
 
 FEEDBACK_DELAY_HOURS = int(os.environ.get("FEEDBACK_DELAY_HOURS", "2"))
-FEEDBACK_PROMPT_TEXT = os.environ.get(
+FEEDBACK_PROMPT_TEXT = env_pair(
     "FEEDBACK_PROMPT_TEXT",
     "Как прошёл твой визит сегодня? 🎮\n"
     "Будем рады короткой оценке от 1 до 5 — это помогает нам стать лучше.",
+    "Bugungi tashrifing qanday o'tdi? 🎮\n"
+    "1 dan 5 gacha qisqa baho bersang xursand bo'lamiz — bu bizga yaxshilanishga yordam beradi.",
 )
 
 REVIEW_LINK_2GIS = os.environ.get("REVIEW_LINK_2GIS", "")
 REVIEW_LINK_GOOGLE = os.environ.get("REVIEW_LINK_GOOGLE", "")
 REVIEW_LINK_YANDEX = os.environ.get("REVIEW_LINK_YANDEX", "")
-REVIEW_PROMPT_TEXT = os.environ.get(
+REVIEW_PROMPT_TEXT = env_pair(
     "REVIEW_PROMPT_TEXT",
     "Оставь отзыв — получи баллы на баланс! 🎁\n\n"
     f"📝 Без фото — {REVIEW_POINTS_NO_PHOTO} баллов\n"
     f"📸 С фото (интерьеры клуба или ты в клубе) — {REVIEW_POINTS_PHOTO} баллов\n\n"
     "После того как оставишь отзыв, выбери ниже, какой именно ты оставил:",
+    "Sharh qoldir — balansga ball ol! 🎁\n\n"
+    f"📝 Rasmsiz — {REVIEW_POINTS_NO_PHOTO} ball\n"
+    f"📸 Rasm bilan (klub interyeri yoki sen klubda) — {REVIEW_POINTS_PHOTO} ball\n\n"
+    "Sharh qoldirgach, qaysi turini qoldirganingni tanla:",
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -179,38 +232,235 @@ dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
 
-# временное хранилище "кто по чьей ссылке идёт регистрироваться"
+# временное хранилище "кто по чьей ссылке идёт регистрироваться" и "какой язык выбрал до подписки"
 # (живёт только пока бот не перезапущен - этого достаточно для короткого пути /start -> контакт)
 PENDING_REFERRALS: dict[int, int] = {}
+PENDING_LANGUAGE: dict[int, str] = {}
 
-MAIN_MENU_KB = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="🎉 Акции")],
-        [KeyboardButton(text="📍 Клуб"), KeyboardButton(text="👥 Пригласить друга")],
-        [KeyboardButton(text="🧾 Прайс"), KeyboardButton(text="✅ Я в клубе")],
-        [KeyboardButton(text="💎 Мой статус"), KeyboardButton(text="🎰 Лототрон")],
-    ],
-    resize_keyboard=True,
+# ---------- ФИКСИРОВАННЫЕ ТЕКСТЫ ИНТЕРФЕЙСА (RU/UZ) ----------
+UI = {
+    "ru": {
+        "start_greeting": (
+            "Привет! Это бот клуба Colizeum Tashkent City. 🎮\n\n"
+            "Номер телефона нужен только для того, чтобы начислять тебе бонусы "
+            "и не пропускать акции клуба — никуда, кроме нашей базы, он не передаётся.\n\n"
+            "Поделись номером, чтобы получить бонус:"
+        ),
+        "share_phone_button": "📱 Отправить номер телефона",
+        "already_subscribed": "Ты уже с нами! 🎮 Вот меню:",
+        "language_changed": "Готово! Теперь общаемся на русском 🇷🇺",
+        "contact_guard": "Пожалуйста, отправь именно свой номер телефона 🙂",
+        "stop_message": "Ты отписан(а) от рассылки. Если захочешь вернуться — просто нажми /start.",
+        "bonus_code_label": "🔑 Код бонуса:",
+        "balance_stub": (
+            "Бот пока не подключён к кассовой системе клуба, поэтому точный баланс "
+            "не покажет 🙏\nУзнать баланс можно у администратора на стойке."
+        ),
+        "promo_prompt": "Выбери, что интересно:",
+        "club_info": "📍 Адрес: {address}\n📞 Телефон: {phone}\n🕒 Часы работы: {hours}",
+        "price_unavailable": "Прайс временно недоступен, уточните у администратора 🙏",
+        "price_caption": "Актуальный прайс-лист 🧾",
+        "invite_need_subscribe": "Сначала подпишись через /start, потом сможешь приглашать друзей 🙂",
+        "invite_text": (
+            "Приглашай друзей и получай бонус за каждого! 🙌\n\n"
+            "Твоя ссылка:\n{link}\n\n"
+            "Приглашено друзей: {count}\n\n"
+            "Когда друг перейдёт по ссылке и поделится номером — вы оба получите бонус."
+        ),
+        "checkin_need_subscribe": "Сначала подпишись через /start 🙂",
+        "checkin_text": (
+            "Покажи этот код администратору, чтобы засчитать визит 📍\n\n"
+            "🔑 Код: {code}\n\n"
+            "Так мы отслеживаем твои визиты для статуса постоянного гостя 🏆"
+        ),
+        "status_need_subscribe": "Сначала подпишись через /start 🙂",
+        "status_max": "Ты уже на максимальном статусе — так держать! 🏆",
+        "status_progress_gold": "До статуса 🥇 Золотой осталось визитов: {left}",
+        "status_progress_silver": "До статуса 🥈 Серебряный осталось визитов: {left}",
+        "status_text": (
+            "💎 Твой статус: {tier}\n"
+            "Подтверждённых визитов: {visits}\n\n"
+            "{progress}\n\n"
+            "Визит засчитывается, когда администратор гасит твой код из кнопки «✅ Я в клубе»."
+        ),
+        "lottery_need_subscribe": "Сначала подпишись через /start 🙂",
+        "lottery_already": "Ты уже крутил барабан сегодня 🎰\nОдин спин в день — приходи завтра!",
+        "lottery_jackpot": "🎉 ДЖЕКПОТ! 777 🎰\nБонус: {amount}\n\n🔑 Код бонуса: {code}",
+        "lottery_win": "🎉 Выигрыш! Три одинаковых символа!\nБонус: {amount}\n\n🔑 Код бонуса: {code}",
+        "lottery_lose": "Почти! В этот раз не повезло 😅\nПриходи завтра, будет ещё один спин!",
+        "review_screenshot_ask": (
+            "Пришли, пожалуйста, скриншот своего отзыва (просто фото экрана с отзывом) — "
+            "и я сразу выдам код бонуса. Это нужно, чтобы администратор мог сверить отзыв.\n\n"
+            "Передумал? Напиши /cancel"
+        ),
+        "review_already": "Бонус за отзыв уже был выдан раньше, спасибо ещё раз! 🙏",
+        "review_thanks": "🙏 Спасибо за отзыв!\nБонус: {amount}\n\n🔑 Код бонуса: {code}",
+        "review_wrong": "Пожалуйста, пришли именно скриншот (фото) своего отзыва 🙏\nИли напиши /cancel, чтобы отменить.",
+        "review_cancelled": "Отменено.",
+        "feedback_thanks_click": "Спасибо за оценку! 🙌",
+        "feedback_thanks_final": "Спасибо, что поделился впечатлением! 🙏",
+        "choose_language": "Выбери язык общения / Tilni tanlang 🌐",
+    },
+    "uz": {
+        "start_greeting": (
+            "Salom! Bu Colizeum Tashkent City klubining boti. 🎮\n\n"
+            "Telefon raqami faqat senga bonuslar berish va klub aksiyalarini o'tkazib "
+            "yubormasliging uchun kerak — u faqat bizning bazamizda saqlanadi.\n\n"
+            "Bonus olish uchun raqamingni ulash:"
+        ),
+        "share_phone_button": "📱 Telefon raqamni yuborish",
+        "already_subscribed": "Sen allaqachon biz bilansan! 🎮 Mana menyu:",
+        "language_changed": "Tayyor! Endi o'zbek tilida gaplashamiz 🇺🇿",
+        "contact_guard": "Iltimos, aynan o'zingning telefon raqamingni yubor 🙂",
+        "stop_message": "Sen tarqatmadan chiqarilding. Agar qaytmoqchi bo'lsang — /start tugmasini bosgin.",
+        "bonus_code_label": "🔑 Bonus kodi:",
+        "balance_stub": (
+            "Bot hozircha klubning kassa tizimiga ulanmagan, shuning uchun aniq balansni "
+            "ko'rsata olmaydi 🙏\nBalansni administratordan peshtaxtada bilib olishing mumkin."
+        ),
+        "promo_prompt": "Nima qiziqtiradi, tanla:",
+        "club_info": "📍 Manzil: {address}\n📞 Telefon: {phone}\n🕒 Ish vaqti: {hours}",
+        "price_unavailable": "Narxnoma vaqtincha mavjud emas, administratordan so'rang 🙏",
+        "price_caption": "Dolzarb narxnoma 🧾",
+        "invite_need_subscribe": "Avval /start orqali ro'yxatdan o't, keyin do'stlaringni taklif qila olasan 🙂",
+        "invite_text": (
+            "Do'stlaringni taklif qil va har biri uchun bonus ol! 🙌\n\n"
+            "Sening havolang:\n{link}\n\n"
+            "Taklif qilingan do'stlar: {count}\n\n"
+            "Do'sting havola orqali o'tib, raqamini ulasa — ikkalangiz ham bonus olasiz."
+        ),
+        "checkin_need_subscribe": "Avval /start orqali ro'yxatdan o't 🙂",
+        "checkin_text": (
+            "Tashrifni hisobga olish uchun ushbu kodni administratorga ko'rsat 📍\n\n"
+            "🔑 Kod: {code}\n\n"
+            "Shu tarzda doimiy mehmon statusi uchun tashriflaringni kuzatamiz 🏆"
+        ),
+        "status_need_subscribe": "Avval /start orqali ro'yxatdan o't 🙂",
+        "status_max": "Sen allaqachon eng yuqori statusdasan — shunday davom et! 🏆",
+        "status_progress_gold": "🥇 Oltin statusigacha qolgan tashriflar: {left}",
+        "status_progress_silver": "🥈 Kumush statusigacha qolgan tashriflar: {left}",
+        "status_text": (
+            "💎 Sening statusing: {tier}\n"
+            "Tasdiqlangan tashriflar: {visits}\n\n"
+            "{progress}\n\n"
+            "Tashrif «✅ Men klubdaman» tugmasidagi kodingni administrator tasdiqlaganda hisoblanadi."
+        ),
+        "lottery_need_subscribe": "Avval /start orqali ro'yxatdan o't 🙂",
+        "lottery_already": "Sen bugun g'ildirakni allaqachon aylantirding 🎰\nKuniga bitta urinish — ertaga kel!",
+        "lottery_jackpot": "🎉 JEKPOT! 777 🎰\nBonus: {amount}\n\n🔑 Bonus kodi: {code}",
+        "lottery_win": "🎉 Yutuq! Uchta bir xil belgi!\nBonus: {amount}\n\n🔑 Bonus kodi: {code}",
+        "lottery_lose": "Deyarli! Bu safar omad kulmadi 😅\nErtaga kel, yana bitta urinish bo'ladi!",
+        "review_screenshot_ask": (
+            "Iltimos, sharhingning skrinshotini yubor (ekran rasmi) — va men darhol bonus "
+            "kodini beraman. Bu administrator sharhni tekshira olishi uchun kerak.\n\n"
+            "Fikringdan qaytdingmi? /cancel deb yoz"
+        ),
+        "review_already": "Sharh uchun bonus avvalroq berilgan, yana rahmat! 🙏",
+        "review_thanks": "🙏 Sharh uchun rahmat!\nBonus: {amount}\n\n🔑 Bonus kodi: {code}",
+        "review_wrong": "Iltimos, aynan sharhingning skrinshotini (rasmini) yubor 🙏\nYoki bekor qilish uchun /cancel deb yoz.",
+        "review_cancelled": "Bekor qilindi.",
+        "feedback_thanks_click": "Baho uchun rahmat! 🙌",
+        "feedback_thanks_final": "Fikringni bildirganing uchun rahmat! 🙏",
+        "choose_language": "Выбери язык общения / Tilni tanlang 🌐",
+    },
+}
+
+BTN = {
+    "balance": {"ru": "💰 Баланс", "uz": "💰 Balans"},
+    "promo": {"ru": "🎉 Акции", "uz": "🎉 Aksiyalar"},
+    "club": {"ru": "📍 Клуб", "uz": "📍 Klub"},
+    "invite": {"ru": "👥 Пригласить друга", "uz": "👥 Do'stni taklif qilish"},
+    "price": {"ru": "🧾 Прайс", "uz": "🧾 Narxnoma"},
+    "checkin": {"ru": "✅ Я в клубе", "uz": "✅ Men klubdaman"},
+    "status": {"ru": "💎 Мой статус", "uz": "💎 Mening statusim"},
+    "lottery": {"ru": "🎰 Лототрон", "uz": "🎰 Omad g'ildiragi"},
+    "language": {"ru": "🌐 Язык", "uz": "🌐 Til"},
+}
+
+PROMO_BTN = {
+    "packages": {"ru": "🔥 Выгодные пакеты", "uz": "🔥 Foydali paketlar"},
+    "hookah": {"ru": "💨 Кальян", "uz": "💨 Kalyan"},
+    "review": {"ru": "⭐ Отзыв за бонус", "uz": "⭐ Sharh uchun bonus"},
+    "general": {"ru": "🎁 Все акции", "uz": "🎁 Barcha aksiyalar"},
+}
+
+REVIEW_LINK_LABELS = {
+    "2gis": {"ru": "📍 Оставить отзыв в 2GIS", "uz": "📍 2GIS'da sharh qoldirish"},
+    "google": {"ru": "🗺 Оставить отзыв в Google Maps", "uz": "🗺 Google Maps'da sharh qoldirish"},
+    "yandex": {"ru": "🟡 Оставить отзыв в Яндекс Картах", "uz": "🟡 Yandex Xaritada sharh qoldirish"},
+}
+REVIEW_CLAIM_LABELS = {
+    "no_photo": {"ru": f"✅ Без фото ({REVIEW_POINTS_NO_PHOTO})", "uz": f"✅ Rasmsiz ({REVIEW_POINTS_NO_PHOTO})"},
+    "photo": {"ru": f"✅ С фото ({REVIEW_POINTS_PHOTO})", "uz": f"✅ Rasm bilan ({REVIEW_POINTS_PHOTO})"},
+}
+
+LANG_PICK_KB = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru"),
+            InlineKeyboardButton(text="🇺🇿 O'zbekcha", callback_data="lang_uz"),
+        ]
+    ]
 )
 
-_review_buttons = []
-if REVIEW_LINK_2GIS:
-    _review_buttons.append([InlineKeyboardButton(text="📍 Оставить отзыв в 2GIS", url=REVIEW_LINK_2GIS)])
-if REVIEW_LINK_GOOGLE:
-    _review_buttons.append(
-        [InlineKeyboardButton(text="🗺 Оставить отзыв в Google Maps", url=REVIEW_LINK_GOOGLE)]
-    )
-if REVIEW_LINK_YANDEX:
-    _review_buttons.append(
-        [InlineKeyboardButton(text="🟡 Оставить отзыв в Яндекс Картах", url=REVIEW_LINK_YANDEX)]
-    )
-_review_buttons.append(
-    [InlineKeyboardButton(text=f"✅ Без фото ({REVIEW_POINTS_NO_PHOTO})", callback_data="review_done_no_photo")]
+FEEDBACK_KB = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text=str(i), callback_data=f"feedback_{i}") for i in range(1, 6)]
+    ]
 )
-_review_buttons.append(
-    [InlineKeyboardButton(text=f"✅ С фото ({REVIEW_POINTS_PHOTO})", callback_data="review_done_photo")]
-)
-REVIEW_KB = InlineKeyboardMarkup(inline_keyboard=_review_buttons)
+
+
+def get_phone_share_kb(lang: str) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=UI[lang]["share_phone_button"], request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def get_main_menu_kb(lang: str) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN["balance"][lang]), KeyboardButton(text=BTN["promo"][lang])],
+            [KeyboardButton(text=BTN["club"][lang]), KeyboardButton(text=BTN["invite"][lang])],
+            [KeyboardButton(text=BTN["price"][lang]), KeyboardButton(text=BTN["checkin"][lang])],
+            [KeyboardButton(text=BTN["status"][lang]), KeyboardButton(text=BTN["lottery"][lang])],
+            [KeyboardButton(text=BTN["language"][lang])],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def get_promo_kb(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=PROMO_BTN["packages"][lang], callback_data="promo_packages")],
+            [InlineKeyboardButton(text=PROMO_BTN["hookah"][lang], callback_data="promo_hookah")],
+            [InlineKeyboardButton(text=PROMO_BTN["review"][lang], callback_data="promo_review")],
+            [InlineKeyboardButton(text=PROMO_BTN["general"][lang], callback_data="promo_general")],
+        ]
+    )
+
+
+def get_review_kb(lang: str) -> InlineKeyboardMarkup:
+    buttons = []
+    if REVIEW_LINK_2GIS:
+        buttons.append([InlineKeyboardButton(text=REVIEW_LINK_LABELS["2gis"][lang], url=REVIEW_LINK_2GIS)])
+    if REVIEW_LINK_GOOGLE:
+        buttons.append([InlineKeyboardButton(text=REVIEW_LINK_LABELS["google"][lang], url=REVIEW_LINK_GOOGLE)])
+    if REVIEW_LINK_YANDEX:
+        buttons.append([InlineKeyboardButton(text=REVIEW_LINK_LABELS["yandex"][lang], url=REVIEW_LINK_YANDEX)])
+    buttons.append(
+        [InlineKeyboardButton(text=REVIEW_CLAIM_LABELS["no_photo"][lang], callback_data="review_done_no_photo")]
+    )
+    buttons.append(
+        [InlineKeyboardButton(text=REVIEW_CLAIM_LABELS["photo"][lang], callback_data="review_done_photo")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def btn_variants(key: str) -> set[str]:
+    return set(BTN[key].values())
 
 
 # ---------- БАЗА ДАННЫХ ----------
@@ -225,7 +475,8 @@ def db_init() -> None:
             phone TEXT,
             joined_at TEXT,
             referred_by INTEGER,
-            reminder_sent INTEGER DEFAULT 0
+            reminder_sent INTEGER DEFAULT 0,
+            language TEXT DEFAULT 'ru'
         )
         """
     )
@@ -251,6 +502,7 @@ def db_init() -> None:
         ("review_prompted", "INTEGER DEFAULT 0"),
         ("review_bonus_claimed", "INTEGER DEFAULT 0"),
         ("last_spin_date", "TEXT"),
+        ("language", "TEXT DEFAULT 'ru'"),
     ):
         try:
             conn.execute(f"ALTER TABLE subscribers ADD COLUMN {column} {coltype}")
@@ -261,16 +513,21 @@ def db_init() -> None:
 
 
 def db_add_subscriber(
-    telegram_id: int, username: str, full_name: str, phone: str, referred_by: int | None
+    telegram_id: int,
+    username: str,
+    full_name: str,
+    phone: str,
+    referred_by: int | None,
+    language: str = "ru",
 ) -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         """
-        INSERT INTO subscribers (telegram_id, username, full_name, phone, joined_at, referred_by, reminder_sent)
-        VALUES (?, ?, ?, ?, ?, ?, 0)
-        ON CONFLICT(telegram_id) DO UPDATE SET phone=excluded.phone
+        INSERT INTO subscribers (telegram_id, username, full_name, phone, joined_at, referred_by, reminder_sent, language)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+        ON CONFLICT(telegram_id) DO UPDATE SET phone=excluded.phone, language=excluded.language
         """,
-        (telegram_id, username, full_name, phone, datetime.now().isoformat(), referred_by),
+        (telegram_id, username, full_name, phone, datetime.now().isoformat(), referred_by, language),
     )
     conn.commit()
     conn.close()
@@ -283,6 +540,28 @@ def db_is_subscriber(telegram_id: int) -> bool:
     ).fetchone()
     conn.close()
     return row is not None
+
+
+def db_get_language(telegram_id: int) -> str:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT language FROM subscribers WHERE telegram_id = ?", (telegram_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else "ru"
+
+
+def db_set_language(telegram_id: int, lang: str) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE subscribers SET language = ? WHERE telegram_id = ?", (lang, telegram_id))
+    conn.commit()
+    conn.close()
+
+
+def get_user_lang(telegram_id: int) -> str:
+    if telegram_id in PENDING_LANGUAGE:
+        return PENDING_LANGUAGE[telegram_id]
+    return db_get_language(telegram_id)
 
 
 def db_all_subscriber_ids() -> list[int]:
@@ -512,18 +791,39 @@ class ReviewState(StatesGroup):
 
 
 # ---------- ВСПОМОГАТЕЛЬНОЕ ----------
-def get_bonus_text_and_type() -> tuple[str, str]:
+def get_bonus_text_and_type(lang: str) -> tuple[str, str]:
     """Днём в будни (10:00-17:00 по Ташкенту) - усиленный бонус, в остальное время - обычный."""
     now = datetime.now(TASHKENT_TZ)
     is_weekday = now.weekday() < 5  # 0=Пн ... 4=Пт
     is_daytime = 10 <= now.hour < 17
     if is_weekday and is_daytime:
-        return DAYTIME_BONUS_TEXT, "daytime"
-    return BONUS_TEXT, "welcome"
+        return DAYTIME_BONUS_TEXT[lang], "daytime"
+    return BONUS_TEXT[lang], "welcome"
 
 
 def get_referral_link(telegram_id: int) -> str:
     return f"https://t.me/{BOT_USERNAME}?start=ref{telegram_id}"
+
+
+# ---------- ОБРАБОТЧИКИ: ВЫБОР ЯЗЫКА ----------
+@router.callback_query(F.data.in_({"lang_ru", "lang_uz"}))
+async def cb_set_language(callback: CallbackQuery) -> None:
+    await callback.answer()
+    lang = "ru" if callback.data == "lang_ru" else "uz"
+    user_id = callback.from_user.id
+
+    if db_is_subscriber(user_id):
+        db_set_language(user_id, lang)
+        await callback.message.answer(UI[lang]["language_changed"], reply_markup=get_main_menu_kb(lang))
+        return
+
+    PENDING_LANGUAGE[user_id] = lang
+    await callback.message.answer(UI[lang]["start_greeting"], reply_markup=get_phone_share_kb(lang))
+
+
+@router.message(F.text.in_(btn_variants("language")))
+async def menu_language(message: Message) -> None:
+    await message.answer(UI[get_user_lang(message.from_user.id)]["choose_language"], reply_markup=LANG_PICK_KB)
 
 
 # ---------- ОБРАБОТЧИКИ: ГОСТИ ----------
@@ -541,33 +841,26 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             pass
 
     if db_is_subscriber(user_id):
-        await message.answer("Ты уже с нами! 🎮 Вот меню:", reply_markup=MAIN_MENU_KB)
+        lang = db_get_language(user_id)
+        await message.answer(UI[lang]["already_subscribed"], reply_markup=get_main_menu_kb(lang))
         return
 
-    kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Отправить номер телефона", request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-    )
-    await message.answer(
-        "Привет! Это бот клуба Colizeum Tashkent City. 🎮\n\n"
-        "Номер телефона нужен только для того, чтобы начислять тебе бонусы "
-        "и не пропускать акции клуба — никуда, кроме нашей базы, он не передаётся.\n\n"
-        "Поделись номером, чтобы получить бонус:",
-        reply_markup=kb,
-    )
+    await message.answer("Выбери язык общения / Tilni tanlang 🌐", reply_markup=LANG_PICK_KB)
 
 
 @router.message(F.contact)
 async def handle_contact(message: Message) -> None:
     user_id = message.from_user.id
+    lang = PENDING_LANGUAGE.get(user_id, "ru")
     contact: Contact = message.contact
+
     # защита: чтобы гость не мог отправить чужой контакт
     if contact.user_id and contact.user_id != user_id:
-        await message.answer("Пожалуйста, отправь именно свой номер телефона 🙂")
+        await message.answer(UI[lang]["contact_guard"])
         return
 
     referrer_id = PENDING_REFERRALS.pop(user_id, None)
+    PENDING_LANGUAGE.pop(user_id, None)
 
     db_add_subscriber(
         telegram_id=user_id,
@@ -575,62 +868,47 @@ async def handle_contact(message: Message) -> None:
         full_name=message.from_user.full_name,
         phone=contact.phone_number,
         referred_by=referrer_id,
+        language=lang,
     )
 
-    bonus_text, bonus_type = get_bonus_text_and_type()
+    bonus_text, bonus_type = get_bonus_text_and_type(lang)
     code = db_create_bonus(user_id, bonus_type)
-    bonus_text = f"{bonus_text}\n\n🔑 Код бонуса: {code}"
+    bonus_text = f"{bonus_text}\n\n{UI[lang]['bonus_code_label']} {code}"
 
     if referrer_id:
-        bonus_text += REFERRED_EXTRA_TEXT
+        bonus_text += REFERRED_EXTRA_TEXT[lang]
         try:
+            referrer_lang = db_get_language(referrer_id)
             referrer_code = db_create_bonus(referrer_id, "referrer")
             await bot.send_message(
-                referrer_id, f"{REFERRER_BONUS_TEXT}\n\n🔑 Код бонуса: {referrer_code}"
+                referrer_id,
+                f"{REFERRER_BONUS_TEXT[referrer_lang]}\n\n{UI[referrer_lang]['bonus_code_label']} {referrer_code}",
             )
         except Exception:
             logging.warning("не удалось уведомить пригласившего %s", referrer_id)
 
-    await message.answer(bonus_text, reply_markup=MAIN_MENU_KB)
+    await message.answer(bonus_text, reply_markup=get_main_menu_kb(lang))
 
 
 @router.message(Command("stop"))
 async def cmd_stop(message: Message) -> None:
-    db_remove_subscriber(message.from_user.id)
-    await message.answer(
-        "Ты отписан(а) от рассылки. Если захочешь вернуться — просто нажми /start.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    user_id = message.from_user.id
+    lang = db_get_language(user_id) if db_is_subscriber(user_id) else "ru"
+    db_remove_subscriber(user_id)
+    await message.answer(UI[lang]["stop_message"], reply_markup=ReplyKeyboardRemove())
 
 
 # ---------- МЕНЮ ----------
-@router.message(F.text == "💰 Баланс")
+@router.message(F.text.in_(btn_variants("balance")))
 async def menu_balance(message: Message) -> None:
-    await message.answer(
-        "Бот пока не подключён к кассовой системе клуба, поэтому точный баланс "
-        "не покажет 🙏\nУзнать баланс можно у администратора на стойке."
-    )
+    lang = get_user_lang(message.from_user.id)
+    await message.answer(UI[lang]["balance_stub"])
 
 
-PROMO_SUBMENU_KB = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="🔥 Выгодные пакеты", callback_data="promo_packages")],
-        [InlineKeyboardButton(text="💨 Кальян", callback_data="promo_hookah")],
-        [InlineKeyboardButton(text="⭐ Отзыв за бонус", callback_data="promo_review")],
-        [InlineKeyboardButton(text="🎁 Все акции", callback_data="promo_general")],
-    ]
-)
-
-FEEDBACK_KB = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text=str(i), callback_data=f"feedback_{i}") for i in range(1, 6)]
-    ]
-)
-
-
-@router.message(F.text == "🎉 Акции")
+@router.message(F.text.in_(btn_variants("promo")))
 async def menu_promo(message: Message) -> None:
-    await message.answer("Выбери, что интересно:", reply_markup=PROMO_SUBMENU_KB)
+    lang = get_user_lang(message.from_user.id)
+    await message.answer(UI[lang]["promo_prompt"], reply_markup=get_promo_kb(lang))
 
 
 async def send_image_folder_or_text(chat_id: int, folder: str, caption_text: str) -> None:
@@ -658,33 +936,36 @@ async def send_image_folder_or_text(chat_id: int, folder: str, caption_text: str
 @router.callback_query(F.data == "promo_packages")
 async def cb_promo_packages(callback: CallbackQuery) -> None:
     await callback.answer()
-    await send_image_folder_or_text(callback.message.chat.id, PACKAGES_DIR, PACKAGES_TEXT)
+    lang = get_user_lang(callback.from_user.id)
+    await send_image_folder_or_text(callback.message.chat.id, PACKAGES_DIR, PACKAGES_TEXT[lang])
 
 
 @router.callback_query(F.data == "promo_hookah")
 async def cb_promo_hookah(callback: CallbackQuery) -> None:
     await callback.answer()
-    await send_image_folder_or_text(callback.message.chat.id, HOOKAH_DIR, HOOKAH_TEXT)
+    lang = get_user_lang(callback.from_user.id)
+    await send_image_folder_or_text(callback.message.chat.id, HOOKAH_DIR, HOOKAH_TEXT[lang])
 
 
 @router.callback_query(F.data == "promo_review")
 async def cb_promo_review(callback: CallbackQuery) -> None:
     await callback.answer()
-    await callback.message.answer(REVIEW_PROMPT_TEXT, reply_markup=REVIEW_KB)
+    lang = get_user_lang(callback.from_user.id)
+    await callback.message.answer(REVIEW_PROMPT_TEXT[lang], reply_markup=get_review_kb(lang))
 
 
 @router.callback_query(F.data == "promo_general")
 async def cb_promo_general(callback: CallbackQuery) -> None:
     await callback.answer()
-    await send_image_folder_or_text(callback.message.chat.id, PROMOS_DIR, PROMO_TEXT)
+    lang = get_user_lang(callback.from_user.id)
+    await send_image_folder_or_text(callback.message.chat.id, PROMOS_DIR, PROMO_TEXT[lang])
 
 
-@router.message(F.text == "📍 Клуб")
+@router.message(F.text.in_(btn_variants("club")))
 async def menu_club(message: Message) -> None:
+    lang = get_user_lang(message.from_user.id)
     await message.answer(
-        f"📍 Адрес: {CLUB_ADDRESS}\n"
-        f"📞 Телефон: {CLUB_PHONE}\n"
-        f"🕒 Часы работы: {CLUB_HOURS}"
+        UI[lang]["club_info"].format(address=CLUB_ADDRESS, phone=CLUB_PHONE, hours=CLUB_HOURS)
     )
     if CLUB_LATITUDE and CLUB_LONGITUDE:
         try:
@@ -695,84 +976,75 @@ async def menu_club(message: Message) -> None:
             logging.warning("некорректные CLUB_LATITUDE/CLUB_LONGITUDE")
 
 
-@router.message(F.text == "🧾 Прайс")
+@router.message(F.text.in_(btn_variants("price")))
 async def menu_price(message: Message) -> None:
-    photo_path = os.path.join(os.path.dirname(__file__), "price.jpg")
+    lang = get_user_lang(message.from_user.id)
+    photo_path = os.path.join(BASE_DIR, "price.jpg")
     if not os.path.exists(photo_path):
-        await message.answer("Прайс временно недоступен, уточните у администратора 🙏")
+        await message.answer(UI[lang]["price_unavailable"])
         return
-    await message.answer_photo(FSInputFile(photo_path), caption="Актуальный прайс-лист 🧾")
+    await message.answer_photo(FSInputFile(photo_path), caption=UI[lang]["price_caption"])
 
 
-@router.message(F.text == "👥 Пригласить друга")
+@router.message(F.text.in_(btn_variants("invite")))
 @router.message(Command("invite"))
 async def menu_invite(message: Message) -> None:
     user_id = message.from_user.id
+    lang = get_user_lang(user_id)
     if not db_is_subscriber(user_id):
-        await message.answer("Сначала подпишись через /start, потом сможешь приглашать друзей 🙂")
+        await message.answer(UI[lang]["invite_need_subscribe"])
         return
     link = get_referral_link(user_id)
     count = db_referral_count(user_id)
-    await message.answer(
-        "Приглашай друзей и получай бонус за каждого! 🙌\n\n"
-        f"Твоя ссылка:\n{link}\n\n"
-        f"Приглашено друзей: {count}\n\n"
-        "Когда друг перейдёт по ссылке и поделится номером — вы оба получите бонус."
-    )
+    await message.answer(UI[lang]["invite_text"].format(link=link, count=count))
 
 
-@router.message(F.text == "✅ Я в клубе")
+@router.message(F.text.in_(btn_variants("checkin")))
 async def menu_checkin(message: Message) -> None:
     user_id = message.from_user.id
+    lang = get_user_lang(user_id)
     if not db_is_subscriber(user_id):
-        await message.answer("Сначала подпишись через /start 🙂")
+        await message.answer(UI[lang]["checkin_need_subscribe"])
         return
     code = db_create_bonus(user_id, "checkin")
-    await message.answer(
-        "Покажи этот код администратору, чтобы засчитать визит 📍\n\n"
-        f"🔑 Код: {code}\n\n"
-        "Так мы отслеживаем твои визиты для статуса постоянного гостя 🏆"
-    )
+    await message.answer(UI[lang]["checkin_text"].format(code=code))
 
 
-@router.message(F.text == "💎 Мой статус")
+@router.message(F.text.in_(btn_variants("status")))
 async def menu_status(message: Message) -> None:
     user_id = message.from_user.id
+    lang = get_user_lang(user_id)
     if not db_is_subscriber(user_id):
-        await message.answer("Сначала подпишись через /start 🙂")
+        await message.answer(UI[lang]["status_need_subscribe"])
         return
 
     visits = db_get_visits(user_id)
     tier = db_get_tier(user_id)
-    tier_label = TIER_LABELS.get(tier, tier)
+    tier_label = GUEST_TIER_LABELS[lang].get(tier, tier)
 
     if tier == "gold":
-        progress = "Ты уже на максимальном статусе — так держать! 🏆"
+        progress = UI[lang]["status_max"]
     elif tier == "silver":
         left = max(TIER_GOLD_VISITS - visits, 0)
-        progress = f"До статуса 🥇 Золотой осталось визитов: {left}"
+        progress = UI[lang]["status_progress_gold"].format(left=left)
     else:
         left = max(TIER_SILVER_VISITS - visits, 0)
-        progress = f"До статуса 🥈 Серебряный осталось визитов: {left}"
+        progress = UI[lang]["status_progress_silver"].format(left=left)
 
-    await message.answer(
-        f"💎 Твой статус: {tier_label}\n"
-        f"Подтверждённых визитов: {visits}\n\n"
-        f"{progress}\n\n"
-        "Визит засчитывается, когда администратор гасит твой код из кнопки «✅ Я в клубе»."
-    )
+    await message.answer(UI[lang]["status_text"].format(tier=tier_label, visits=visits, progress=progress))
 
 
-@router.message(F.text == "🎰 Лототрон")
+@router.message(F.text.in_(btn_variants("lottery")))
 async def menu_lottery(message: Message) -> None:
     user_id = message.from_user.id
+    lang = get_user_lang(user_id)
     if not db_is_subscriber(user_id):
-        await message.answer("Сначала подпишись через /start 🙂")
+        await message.answer(UI[lang]["lottery_need_subscribe"])
         return
 
     today = datetime.now(TASHKENT_TZ).date().isoformat()
     if db_get_last_spin_date(user_id) == today:
-        await message.answer("Ты уже крутил барабан сегодня 🎰\nОдин спин в день — приходи завтра!")
+        await message.answer(UI[lang]["lottery_already"])
         return
 
     db_set_last_spin_date(user_id, today)
@@ -783,16 +1055,16 @@ async def menu_lottery(message: Message) -> None:
     if value == 64:
         code = db_create_bonus(user_id, "lottery_jackpot")
         amount = BONUS_AMOUNTS.get("lottery_jackpot")
-        await message.answer(f"🎉 ДЖЕКПОТ! 777 🎰\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
+        await message.answer(UI[lang]["lottery_jackpot"].format(amount=amount, code=code))
     elif value in (1, 22, 43):
         code = db_create_bonus(user_id, "lottery_win")
         amount = BONUS_AMOUNTS.get("lottery_win")
-        await message.answer(f"🎉 Выигрыш! Три одинаковых символа!\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
+        await message.answer(UI[lang]["lottery_win"].format(amount=amount, code=code))
     else:
-        await message.answer("Почти! В этот раз не повезло 😅\nПриходи завтра, будет ещё один спин!")
+        await message.answer(UI[lang]["lottery_lose"])
 
 
-# ---------- ОБРАБОТЧИКИ: АДМИН ----------
+# ---------- ОБРАБОТЧИКИ: АДМИН (всегда на русском) ----------
 def is_admin(telegram_id: int) -> bool:
     return telegram_id in ADMIN_IDS
 
@@ -855,10 +1127,13 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
 
         if new_tier:
             db_set_tier(guest_id, new_tier)
-            tier_text = TIER_GOLD_TEXT if new_tier == "gold" else TIER_SILVER_TEXT
+            guest_lang = db_get_language(guest_id)
+            tier_text = (TIER_GOLD_TEXT if new_tier == "gold" else TIER_SILVER_TEXT)[guest_lang]
             tier_code = db_create_bonus(guest_id, f"tier_{new_tier}")
             try:
-                await bot.send_message(guest_id, f"{tier_text}\n\n🔑 Код бонуса: {tier_code}")
+                await bot.send_message(
+                    guest_id, f"{tier_text}\n\n{UI[guest_lang]['bonus_code_label']} {tier_code}"
+                )
             except Exception:
                 logging.warning("не удалось уведомить гостя %s о новом статусе", guest_id)
             reply += f"\n🎉 Гость получил новый статус: {TIER_LABELS.get(new_tier, new_tier)}!"
@@ -980,35 +1255,34 @@ async def broadcast_wrong_answer(message: Message) -> None:
 async def cb_review_done(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     user_id = callback.from_user.id
+    lang = get_user_lang(user_id)
+
     if db_has_review_claimed(user_id):
-        await callback.message.answer("Бонус за отзыв уже был выдан раньше, спасибо ещё раз! 🙏")
+        await callback.message.answer(UI[lang]["review_already"])
         return
 
     bonus_type = "review_photo" if callback.data == "review_done_photo" else "review_no_photo"
     await state.update_data(review_bonus_type=bonus_type)
     await state.set_state(ReviewState.waiting_screenshot)
-    await callback.message.answer(
-        "Пришли, пожалуйста, скриншот своего отзыва (просто фото экрана с отзывом) — "
-        "и я сразу выдам код бонуса. Это нужно, чтобы администратор мог сверить отзыв.\n\n"
-        "Передумал? Напиши /cancel"
-    )
+    await callback.message.answer(UI[lang]["review_screenshot_ask"])
 
 
 @router.message(ReviewState.waiting_screenshot, F.photo)
 async def review_screenshot_received(message: Message, state: FSMContext) -> None:
+    user_id = message.from_user.id
+    lang = get_user_lang(user_id)
     data = await state.get_data()
     bonus_type = data.get("review_bonus_type", "review_no_photo")
     await state.clear()
 
-    user_id = message.from_user.id
     if db_has_review_claimed(user_id):
-        await message.answer("Бонус за отзыв уже был выдан раньше, спасибо ещё раз! 🙏")
+        await message.answer(UI[lang]["review_already"])
         return
 
     db_mark_review_claimed(user_id)
     code = db_create_bonus(user_id, bonus_type)
     amount = BONUS_AMOUNTS.get(bonus_type, "")
-    await message.answer(f"🙏 Спасибо за отзыв!\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
+    await message.answer(UI[lang]["review_thanks"].format(amount=amount, code=code))
 
     label = BONUS_LABELS.get(bonus_type, bonus_type)
     for admin_id in ADMIN_IDS:
@@ -1027,18 +1301,18 @@ async def review_screenshot_received(message: Message, state: FSMContext) -> Non
 
 @router.message(ReviewState.waiting_screenshot)
 async def review_screenshot_wrong(message: Message, state: FSMContext) -> None:
+    lang = get_user_lang(message.from_user.id)
     if (message.text or "").strip().lower() == "/cancel":
         await state.clear()
-        await message.answer("Отменено.")
+        await message.answer(UI[lang]["review_cancelled"])
         return
-    await message.answer(
-        "Пожалуйста, пришли именно скриншот (фото) своего отзыва 🙏\nИли напиши /cancel, чтобы отменить."
-    )
+    await message.answer(UI[lang]["review_wrong"])
 
 
 @router.callback_query(F.data.startswith("feedback_"))
 async def cb_feedback(callback: CallbackQuery) -> None:
-    await callback.answer("Спасибо за оценку! 🙌")
+    lang = get_user_lang(callback.from_user.id)
+    await callback.answer(UI[lang]["feedback_thanks_click"])
     rating = callback.data.split("_", 1)[1]
     user = callback.from_user
 
@@ -1056,7 +1330,7 @@ async def cb_feedback(callback: CallbackQuery) -> None:
         except Exception:
             logging.warning("не удалось переслать оценку админу %s", admin_id)
 
-    await callback.message.answer("Спасибо, что поделился впечатлением! 🙏")
+    await callback.message.answer(UI[lang]["feedback_thanks_final"])
 
 
 # ---------- ФОНОВАЯ ЗАДАЧА: НАПОМИНАНИЕ ЧЕРЕЗ N ДНЕЙ ПОСЛЕ ПОДПИСКИ ----------
@@ -1065,8 +1339,11 @@ async def reminder_loop() -> None:
         try:
             for tg_id in db_due_for_reminder(REMINDER_DELAY_DAYS):
                 try:
+                    lang = db_get_language(tg_id)
                     code = db_create_bonus(tg_id, "reminder")
-                    await bot.send_message(tg_id, f"{REMINDER_TEXT}\n\n🔑 Код бонуса: {code}")
+                    await bot.send_message(
+                        tg_id, f"{REMINDER_TEXT[lang]}\n\n{UI[lang]['bonus_code_label']} {code}"
+                    )
                 except Exception:
                     logging.warning("не удалось отправить напоминание %s", tg_id)
                 db_mark_reminder_sent(tg_id)
@@ -1081,7 +1358,8 @@ async def feedback_loop() -> None:
         try:
             for tg_id in db_due_for_feedback(FEEDBACK_DELAY_HOURS):
                 try:
-                    await bot.send_message(tg_id, FEEDBACK_PROMPT_TEXT, reply_markup=FEEDBACK_KB)
+                    lang = db_get_language(tg_id)
+                    await bot.send_message(tg_id, FEEDBACK_PROMPT_TEXT[lang], reply_markup=FEEDBACK_KB)
                 except Exception:
                     logging.warning("не удалось отправить запрос обратной связи %s", tg_id)
                 db_mark_feedback_prompted(tg_id)
