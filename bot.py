@@ -217,8 +217,6 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
 
     Колесо Фортуны показываем только тем, кто уже дорос до нужного статуса
     (см. WHEEL_MIN_TIER) — до этого кнопка новому гостю просто не видна.
-    Баланс временно не подключён к кассе, поэтому убран в самый низ,
-    чтобы не быть первым, что видит гость сразу после регистрации.
     """
     rows = [
         [KeyboardButton(text="🎉 Акции"), KeyboardButton(text="📍 Клуб")],
@@ -228,7 +226,6 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
     tier = db_get_tier(user_id)
     if TIER_RANK.get(tier, 0) >= WHEEL_MIN_TIER_RANK:
         rows.append([WHEEL_BUTTON])
-    rows.append([KeyboardButton(text="💰 Баланс")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 _review_buttons = []
@@ -254,6 +251,11 @@ REVIEW_KB = InlineKeyboardMarkup(inline_keyboard=_review_buttons)
 # ---------- БАЗА ДАННЫХ ----------
 def db_init() -> None:
     conn = sqlite3.connect(DB_PATH)
+    # WAL вместо дефолтного rollback-journal — позволяет читать базу, пока кто-то
+    # другой пишет (важно при одновременных спинах/чек-инах/рассылке на много гостей).
+    # Настройка сохраняется в самом файле базы, достаточно выставить один раз.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS subscribers (
@@ -786,12 +788,6 @@ async def cmd_stop(message: Message) -> None:
 
 
 # ---------- МЕНЮ ----------
-@router.message(F.text == "💰 Баланс")
-async def menu_balance(message: Message) -> None:
-    await message.answer(
-        "Бот пока не подключён к кассовой системе клуба, поэтому точный баланс "
-        "не покажет 🙏\nУзнать баланс можно у администратора на стойке."
-    )
 
 
 PROMO_SUBMENU_KB = InlineKeyboardMarkup(
