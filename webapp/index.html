@@ -202,7 +202,7 @@
     <div class="result-title" id="resultTitle"></div>
     <div class="result-amount" id="resultAmount"></div>
     <div class="result-code" id="resultCode"></div>
-    <div class="result-hint">Покажи это администратору на стойке</div>
+    <div class="result-hint" id="resultHint">Покажи это администратору на стойке</div>
   </div>
 </div>
 
@@ -218,6 +218,7 @@
   const resultTitle = document.getElementById("resultTitle");
   const resultAmount = document.getElementById("resultAmount");
   const resultCode = document.getElementById("resultCode");
+  const resultHint = document.getElementById("resultHint");
 
   let currentRotation = 0;
   let spinning = false;
@@ -300,11 +301,13 @@
           resultTitle.textContent = "Почти! Не повезло 😅";
           resultAmount.textContent = "Приходи завтра — будет ещё один спин!";
           resultCode.style.display = "none";
+          resultHint.style.display = "none";
         } else {
           resultTitle.textContent = data.prize_type === "jackpot" ? "🎉 ДЖЕКПОТ!" : "🎉 Выигрыш!";
           resultAmount.textContent = "Бонус: " + data.amount;
           resultCode.style.display = "inline-block";
           resultCode.textContent = data.code;
+          resultHint.style.display = "block";
           if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
         }
         resultCard.classList.add("show");
