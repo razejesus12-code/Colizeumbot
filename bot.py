@@ -44,6 +44,8 @@ BOT_USERNAME = os.environ.get("BOT_USERNAME", "Colizeum_Tashkent_City_bot")
 ADMIN_IDS = {
     int(x.strip()) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()
 }
+# Отдельный владелец — для команд, которые не должны быть доступны даже другим админам
+OWNER_ID = int(os.environ.get("OWNER_ID", "0") or "0")
 
 BONUS_TEXT = os.environ.get(
     "BONUS_TEXT",
@@ -131,8 +133,9 @@ BONUS_LABELS = {
 
 REVIEW_POINTS_NO_PHOTO = os.environ.get("REVIEW_POINTS_NO_PHOTO", "15 000")
 REVIEW_POINTS_PHOTO = os.environ.get("REVIEW_POINTS_PHOTO", "25 000")
-LOTTERY_JACKPOT_POINTS = os.environ.get("LOTTERY_JACKPOT_POINTS", "30 000")
-LOTTERY_WIN_POINTS = os.environ.get("LOTTERY_WIN_POINTS", "10 000")
+LOTTERY_JACKPOT_POINTS = os.environ.get("LOTTERY_JACKPOT_POINTS", "50 000")
+LOTTERY_WIN_POINTS = os.environ.get("LOTTERY_WIN_POINTS", "20 000")
+WHEEL_MIN_TIER = os.environ.get("WHEEL_MIN_TIER", "silver")  # "silver" или "gold"
 
 # что администратор должен начислить гостю при погашении кода
 # (checkin намеренно не включён - это просто счётчик визита, без начисления)
@@ -208,15 +211,25 @@ PENDING_REFERRALS: dict[int, int] = {}
 
 WHEEL_BUTTON = KeyboardButton(text="🎡 Колесо Фортуны")
 
-MAIN_MENU_KB = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="🎉 Акции")],
-        [KeyboardButton(text="📍 Клуб"), KeyboardButton(text="👥 Пригласить друга")],
-        [KeyboardButton(text="🧾 Прайс"), KeyboardButton(text="✅ Я в клубе")],
-        [KeyboardButton(text="💎 Мой статус"), WHEEL_BUTTON],
-    ],
-    resize_keyboard=True,
-)
+
+def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
+    """Собирает главное меню под конкретного гостя.
+
+    Колесо Фортуны показываем только тем, кто уже дорос до нужного статуса
+    (см. WHEEL_MIN_TIER) — до этого кнопка новому гостю просто не видна.
+    Баланс временно не подключён к кассе, поэтому убран в самый низ,
+    чтобы не быть первым, что видит гость сразу после регистрации.
+    """
+    rows = [
+        [KeyboardButton(text="🎉 Акции"), KeyboardButton(text="📍 Клуб")],
+        [KeyboardButton(text="👥 Пригласить друга"), KeyboardButton(text="🧾 Прайс")],
+        [KeyboardButton(text="✅ Я в клубе"), KeyboardButton(text="💎 Мой статус")],
+    ]
+    tier = db_get_tier(user_id)
+    if TIER_RANK.get(tier, 0) >= WHEEL_MIN_TIER_RANK:
+        rows.append([WHEEL_BUTTON])
+    rows.append([KeyboardButton(text="💰 Баланс")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 _review_buttons = []
 if REVIEW_LINK_2GIS:
@@ -636,6 +649,18 @@ def db_find_by_phone(query: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def db_get_subscriber_by_id(telegram_id: int) -> dict | None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT telegram_id, username, full_name, phone, joined_at, referred_by, "
+        "visits_confirmed, tier FROM subscribers WHERE telegram_id = ?",
+        (telegram_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 # ---------- СОСТОЯНИЯ ----------
 class BroadcastState(StatesGroup):
     waiting_segment = State()
@@ -701,7 +726,7 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
             pass
 
     if db_is_subscriber(user_id):
-        await message.answer("Ты уже с нами! 🎮 Вот меню:", reply_markup=MAIN_MENU_KB)
+        await message.answer("Ты уже с нами! 🎮 Вот меню:", reply_markup=main_menu_kb(user_id))
         return
 
     kb = ReplyKeyboardMarkup(
@@ -748,7 +773,7 @@ async def handle_contact(message: Message) -> None:
         except Exception:
             logging.warning("не удалось уведомить пригласившего %s", referrer_id)
 
-    await message.answer(bonus_text, reply_markup=MAIN_MENU_KB)
+    await message.answer(bonus_text, reply_markup=main_menu_kb(user_id))
 
 
 @router.message(Command("stop"))
@@ -916,6 +941,17 @@ async def menu_status(message: Message) -> None:
 
 @router.message(F.text == "🎡 Колесо Фортуны")
 async def menu_wheel(message: Message) -> None:
+    user_id = message.from_user.id
+    elig = wheel_eligibility(user_id)
+    if not elig["eligible"]:
+        left = max(elig["visits_needed"] - elig["visits"], 0)
+        await message.answer(
+            f"Колесо фортуны открывается с 🥈 Серебряного статуса.\n"
+            f"Визитов: {elig['visits']} из {elig['visits_needed']} — осталось {left} 🙂",
+            reply_markup=main_menu_kb(user_id),
+        )
+        return
+
     if not WEBAPP_URL:
         await message.answer(
             "Колесо фортуны скоро заработает — администратор ещё настраивает эту функцию 🎡"
@@ -938,6 +974,10 @@ async def menu_wheel(message: Message) -> None:
 # ---------- ОБРАБОТЧИКИ: АДМИН ----------
 def is_admin(telegram_id: int) -> bool:
     return telegram_id in ADMIN_IDS
+
+
+def is_owner(telegram_id: int) -> bool:
+    return OWNER_ID != 0 and telegram_id == OWNER_ID
 
 
 @router.message(Command("stats"))
@@ -1011,7 +1051,11 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
             tier_text = TIER_GOLD_TEXT if new_tier == "gold" else TIER_SILVER_TEXT
             tier_code = db_create_bonus(guest_id, f"tier_{new_tier}")
             try:
-                await bot.send_message(guest_id, f"{tier_text}\n\n🔑 Код бонуса: {tier_code}")
+                await bot.send_message(
+                    guest_id,
+                    f"{tier_text}\n\n🔑 Код бонуса: {tier_code}",
+                    reply_markup=main_menu_kb(guest_id),
+                )
             except Exception:
                 logging.warning("не удалось уведомить гостя %s о новом статусе", guest_id)
             reply += f"\n🎉 Гость получил новый статус: {TIER_LABELS.get(new_tier, new_tier)}!"
@@ -1074,6 +1118,91 @@ async def cmd_find(message: Message, command: CommandObject) -> None:
             f"👥 Приглашено друзей: {refs}\n"
         )
     await message.answer("\n".join(lines))
+
+
+TIER_ALIASES = {
+    "none": "", "нет": "", "снять": "", "без": "",
+    "silver": "silver", "серебро": "silver", "серебряный": "silver",
+    "gold": "gold", "золото": "gold", "золотой": "gold",
+}
+
+
+@router.message(Command("setstatus"))
+async def cmd_setstatus(message: Message, command: CommandObject) -> None:
+    # доступно только владельцу — сознательно не is_admin(), чтобы даже другие
+    # админы не могли вручную накручивать себе/друзьям статус
+    if not is_owner(message.from_user.id):
+        return
+
+    args = (command.args or "").strip().split()
+    if len(args) < 2:
+        await message.answer(
+            "Использование: /setstatus НОМЕР_ИЛИ_ID СТАТУС\n"
+            "Статус: silver / gold / none\n\n"
+            "Примеры:\n"
+            "/setstatus 998901234567 gold\n"
+            "/setstatus 123456789 none"
+        )
+        return
+
+    tier_raw = args[-1].lower()
+    if tier_raw not in TIER_ALIASES:
+        await message.answer("Статус должен быть один из: silver, gold, none.")
+        return
+    new_tier = TIER_ALIASES[tier_raw]
+
+    identifier = " ".join(args[:-1]).strip()
+    identifier_digits = "".join(ch for ch in identifier if ch.isdigit())
+
+    target = None
+    matches: list[dict] = []
+
+    if identifier_digits:
+        target = db_get_subscriber_by_id(int(identifier_digits))
+
+    if not target:
+        matches = db_find_by_phone(identifier_digits or identifier)
+        if len(matches) == 1:
+            target = matches[0]
+
+    if not target:
+        if len(matches) > 1:
+            lines = [f"Нашёл {len(matches)} совпадений, уточни номер:\n"]
+            for g in matches[:10]:
+                lines.append(f"🆔 {g['telegram_id']} — {g['full_name'] or 'без имени'} — 📞 {g['phone']}")
+            await message.answer("\n".join(lines))
+        else:
+            await message.answer("Не нашёл гостя ни по ID, ни по номеру телефона.")
+        return
+
+    old_tier = target["tier"] or ""
+    old_label = TIER_LABELS.get(old_tier, "Без статуса")
+    new_label = TIER_LABELS.get(new_tier, "Без статуса")
+
+    if old_tier == new_tier:
+        await message.answer(f"У гостя уже стоит статус: {new_label}. Ничего не поменял.")
+        return
+
+    db_set_tier(target["telegram_id"], new_tier)
+    name = target["full_name"] or "без имени"
+    await message.answer(
+        f"✅ Статус изменён вручную\n"
+        f"👤 {name}\n"
+        f"🆔 {target['telegram_id']}\n"
+        f"📞 {target['phone']}\n"
+        f"{old_label} → {new_label}"
+    )
+
+    try:
+        await bot.send_message(
+            target["telegram_id"],
+            f"Твой статус в Colizeum обновлён: {new_label} 🎮",
+            reply_markup=main_menu_kb(target["telegram_id"]),
+        )
+    except Exception:
+        logging.warning(
+            "не удалось уведомить гостя %s о ручном изменении статуса", target["telegram_id"]
+        )
 
 
 @router.message(Command("export"))
@@ -1378,16 +1507,32 @@ def verify_webapp_init_data(init_data: str) -> dict | None:
 
 
 # 8 секторов колеса (порядок важен - должен совпадать с версткой в webapp/index.html)
+# только 1 обычный приз и 1 джекпот из 8 - редко, но крупно
 WHEEL_SEGMENTS = [
     {"index": 0, "type": "lose"},
-    {"index": 1, "type": "win"},
-    {"index": 2, "type": "lose"},
-    {"index": 3, "type": "win"},
+    {"index": 1, "type": "lose"},
+    {"index": 2, "type": "win"},
+    {"index": 3, "type": "lose"},
     {"index": 4, "type": "lose"},
-    {"index": 5, "type": "win"},
+    {"index": 5, "type": "lose"},
     {"index": 6, "type": "lose"},
     {"index": 7, "type": "jackpot"},
 ]
+
+TIER_RANK = {"": 0, "silver": 1, "gold": 2}
+WHEEL_MIN_TIER_RANK = TIER_RANK.get(WHEEL_MIN_TIER, 1)
+
+
+def wheel_eligibility(user_id: int) -> dict:
+    tier = db_get_tier(user_id)
+    visits = db_get_visits(user_id)
+    eligible = TIER_RANK.get(tier, 0) >= WHEEL_MIN_TIER_RANK
+    return {
+        "tier": tier,
+        "visits": visits,
+        "visits_needed": TIER_SILVER_VISITS if WHEEL_MIN_TIER_RANK <= 1 else TIER_GOLD_VISITS,
+        "eligible": eligible,
+    }
 
 
 async def handle_wheel_page(request: web.Request) -> web.Response:
@@ -1406,11 +1551,13 @@ async def handle_wheel_status(request: web.Request) -> web.Response:
 
     user_id = user["id"]
     if not db_is_subscriber(user_id):
-        return web.json_response({"error": "not_subscribed"}, status=403)
+        return web.json_response({"subscribed": False})
 
+    elig = wheel_eligibility(user_id)
     today = datetime.now(TASHKENT_TZ).date().isoformat()
-    can_spin = db_get_last_spin_date(user_id) != today
-    return web.json_response({"can_spin": can_spin})
+    can_spin = elig["eligible"] and db_get_last_spin_date(user_id) != today
+
+    return web.json_response({"subscribed": True, "can_spin": can_spin, **elig})
 
 
 async def handle_wheel_spin(request: web.Request) -> web.Response:
@@ -1426,6 +1573,10 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
     user_id = user["id"]
     if not db_is_subscriber(user_id):
         return web.json_response({"error": "not_subscribed"}, status=403)
+
+    elig = wheel_eligibility(user_id)
+    if not elig["eligible"]:
+        return web.json_response({"error": "not_eligible"}, status=403)
 
     today = datetime.now(TASHKENT_TZ).date().isoformat()
     if db_get_last_spin_date(user_id) == today:
