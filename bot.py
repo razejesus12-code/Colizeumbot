@@ -120,6 +120,7 @@ BONUS_LABELS = {
     "review_photo": "Отзыв с фото",
     "lottery_jackpot": "Джекпот в лототроне 🎰",
     "lottery_win": "Выигрыш в лототроне 🎰",
+    "winback": "Бонус для постоянника (давно не был)",
 }
 
 REVIEW_POINTS_NO_PHOTO = os.environ.get("REVIEW_POINTS_NO_PHOTO", "15 000")
@@ -136,6 +137,7 @@ BONUS_AMOUNTS = {
     "reminder": f"+{os.environ.get('BONUS_PERCENT_REMINDER', '20')}% к пополнению",
     "tier_silver": f"+{os.environ.get('BONUS_PERCENT_TIER_SILVER', '15')}% к пополнению",
     "tier_gold": f"+{os.environ.get('BONUS_PERCENT_TIER_GOLD', '25')}% к пополнению",
+    "winback": f"+{os.environ.get('BONUS_PERCENT_WINBACK', '25')}% к пополнению",
     "review_no_photo": f"{REVIEW_POINTS_NO_PHOTO} баллов на баланс",
     "review_photo": f"{REVIEW_POINTS_PHOTO} баллов на баланс",
     "lottery_jackpot": f"{LOTTERY_JACKPOT_POINTS} баллов на баланс",
@@ -174,6 +176,17 @@ REVIEW_PROMPT_TEXT = os.environ.get(
     f"📸 С фото (интерьеры клуба или ты в клубе) — {REVIEW_POINTS_PHOTO} баллов\n\n"
     "После того как оставишь отзыв, выбери ниже, какой именно ты оставил:",
 )
+
+WINBACK_DELAY_DAYS = int(os.environ.get("WINBACK_DELAY_DAYS", "30"))
+WINBACK_MIN_VISITS = int(os.environ.get("WINBACK_MIN_VISITS", "2"))
+WINBACK_TEXT = os.environ.get(
+    "WINBACK_TEXT",
+    "Давно не виделись! 👋\n\n"
+    "Мы соскучились — держи бонус специально для постоянных гостей: "
+    "+25% к следующему пополнению баланса.\n"
+    "Покажи это сообщение администратору на стойке в течение 7 дней.",
+)
+BACKUP_INTERVAL_DAYS = int(os.environ.get("BACKUP_INTERVAL_DAYS", "7"))
 
 logging.basicConfig(level=logging.INFO)
 
@@ -244,6 +257,14 @@ def db_init() -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bot_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """
+    )
     for column, coltype in (
         ("referred_by", "INTEGER"),
         ("reminder_sent", "INTEGER DEFAULT 0"),
@@ -253,6 +274,8 @@ def db_init() -> None:
         ("review_prompted", "INTEGER DEFAULT 0"),
         ("review_bonus_claimed", "INTEGER DEFAULT 0"),
         ("last_spin_date", "TEXT"),
+        ("last_checkin_at", "TEXT"),
+        ("winback_sent", "INTEGER DEFAULT 0"),
     ):
         try:
             conn.execute(f"ALTER TABLE subscribers ADD COLUMN {column} {coltype}")
@@ -492,6 +515,95 @@ def db_list_by_tier(tier: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def db_set_last_checkin(telegram_id: int) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE subscribers SET last_checkin_at = ?, winback_sent = 0 WHERE telegram_id = ?",
+        (datetime.now().isoformat(), telegram_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_due_for_winback(delay_days: int, min_visits: int) -> list[int]:
+    cutoff = (datetime.now() - timedelta(days=delay_days)).isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT telegram_id FROM subscribers "
+        "WHERE winback_sent = 0 AND visits_confirmed >= ? "
+        "AND last_checkin_at IS NOT NULL AND last_checkin_at <= ?",
+        (min_visits, cutoff),
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def db_mark_winback_sent(telegram_id: int) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE subscribers SET winback_sent = 1 WHERE telegram_id = ?", (telegram_id,))
+    conn.commit()
+    conn.close()
+
+
+def db_segment_ids(segment: str) -> list[int]:
+    conn = sqlite3.connect(DB_PATH)
+    if segment == "gold":
+        rows = conn.execute("SELECT telegram_id FROM subscribers WHERE tier = 'gold'").fetchall()
+    elif segment == "silver":
+        rows = conn.execute("SELECT telegram_id FROM subscribers WHERE tier = 'silver'").fetchall()
+    elif segment == "new":
+        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        rows = conn.execute("SELECT telegram_id FROM subscribers WHERE joined_at >= ?", (cutoff,)).fetchall()
+    elif segment == "referred":
+        rows = conn.execute("SELECT telegram_id FROM subscribers WHERE referred_by IS NOT NULL").fetchall()
+    else:
+        rows = conn.execute("SELECT telegram_id FROM subscribers").fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def db_stats_extended() -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    total = conn.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]
+    today_cutoff = datetime.now(TASHKENT_TZ).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    week_cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+    new_today = conn.execute("SELECT COUNT(*) FROM subscribers WHERE joined_at >= ?", (today_cutoff,)).fetchone()[0]
+    new_week = conn.execute("SELECT COUNT(*) FROM subscribers WHERE joined_at >= ?", (week_cutoff,)).fetchone()[0]
+    gold = conn.execute("SELECT COUNT(*) FROM subscribers WHERE tier = 'gold'").fetchone()[0]
+    silver = conn.execute("SELECT COUNT(*) FROM subscribers WHERE tier = 'silver'").fetchone()[0]
+    referred = conn.execute("SELECT COUNT(*) FROM subscribers WHERE referred_by IS NOT NULL").fetchone()[0]
+    bonuses_redeemed = conn.execute("SELECT COUNT(*) FROM bonuses WHERE used_at IS NOT NULL").fetchone()[0]
+    conn.close()
+    return {
+        "total": total,
+        "new_today": new_today,
+        "new_week": new_week,
+        "gold": gold,
+        "silver": silver,
+        "no_status": total - gold - silver,
+        "referred": referred,
+        "bonuses_redeemed": bonuses_redeemed,
+    }
+
+
+def db_get_setting(key: str) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT value FROM bot_settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def db_set_setting(key: str, value: str) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO bot_settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    conn.commit()
+    conn.close()
+
+
 def db_export_all() -> list[dict]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -503,10 +615,42 @@ def db_export_all() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def db_find_by_phone(query: str) -> list[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT telegram_id, username, full_name, phone, joined_at, referred_by, "
+        "visits_confirmed, tier FROM subscribers WHERE phone LIKE ? ORDER BY joined_at DESC",
+        (f"%{query}%",),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 # ---------- СОСТОЯНИЯ ----------
 class BroadcastState(StatesGroup):
+    waiting_segment = State()
     waiting_text = State()
     waiting_confirm = State()
+
+
+BROADCAST_SEGMENT_KB = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Все подписчики", callback_data="bcseg_all")],
+        [InlineKeyboardButton(text="🥇 Только золотые", callback_data="bcseg_gold")],
+        [InlineKeyboardButton(text="🥈 Только серебряные", callback_data="bcseg_silver")],
+        [InlineKeyboardButton(text="🆕 Новые за неделю", callback_data="bcseg_new")],
+        [InlineKeyboardButton(text="🔗 Пришли по рефералке", callback_data="bcseg_referred")],
+    ]
+)
+
+SEGMENT_LABELS = {
+    "all": "Все подписчики",
+    "gold": "Золотые",
+    "silver": "Серебряные",
+    "new": "Новые за неделю",
+    "referred": "Пришли по рефералке",
+}
 
 
 class ReviewState(StatesGroup):
@@ -799,7 +943,18 @@ def is_admin(telegram_id: int) -> bool:
 async def cmd_stats(message: Message) -> None:
     if not is_admin(message.from_user.id):
         return
-    await message.answer(f"Подписчиков в базе: {db_count()}")
+    s = db_stats_extended()
+    await message.answer(
+        "📊 Статистика клуба\n\n"
+        f"Всего подписчиков: {s['total']}\n"
+        f"Новых сегодня: {s['new_today']}\n"
+        f"Новых за неделю: {s['new_week']}\n\n"
+        f"🥇 Золотых: {s['gold']}\n"
+        f"🥈 Серебряных: {s['silver']}\n"
+        f"Без статуса: {s['no_status']}\n\n"
+        f"👥 Пришли по рефералке: {s['referred']}\n"
+        f"🔑 Бонусов погашено всего: {s['bonuses_redeemed']}"
+    )
 
 
 @router.message(Command("redeem"))
@@ -838,6 +993,7 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
     if row["bonus_type"] == "checkin":
         guest_id = row["telegram_id"]
         visits = db_increment_visits(guest_id)
+        db_set_last_checkin(guest_id)
         if visits == 1:
             db_set_first_checkin(guest_id)
         current_tier = db_get_tier(guest_id)
@@ -882,43 +1038,57 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
     await message.answer(reply)
 
 
+@router.message(Command("find"))
+async def cmd_find(message: Message, command: CommandObject) -> None:
+    if not is_admin(message.from_user.id):
+        return
+
+    query = (command.args or "").strip()
+    if not query:
+        await message.answer("Использование: /find НОМЕР\n(можно вводить часть номера, без +998 тоже сработает)")
+        return
+
+    # уберём пробелы/скобки/дефисы, чтобы поиск был терпимее к формату ввода
+    query_clean = "".join(ch for ch in query if ch.isdigit())
+    matches = db_find_by_phone(query_clean or query)
+
+    if not matches:
+        await message.answer("Никого не нашёл по этому номеру.")
+        return
+
+    tier_map = {"": "Без статуса", "silver": "🥈 Серебряный", "gold": "🥇 Золотой"}
+    lines = [f"Найдено: {len(matches)}\n"]
+    for g in matches:
+        name = g["full_name"] or "без имени"
+        username = f"@{g['username']}" if g["username"] else "—"
+        joined = (g["joined_at"] or "")[:10]
+        tier_label = tier_map.get(g["tier"] or "", g["tier"])
+        refs = db_referral_count(g["telegram_id"])
+        lines.append(
+            f"👤 {name} ({username})\n"
+            f"📞 {g['phone']}\n"
+            f"🆔 {g['telegram_id']}\n"
+            f"📅 Регистрация: {joined}\n"
+            f"💎 Статус: {tier_label}, визитов: {g['visits_confirmed'] or 0}\n"
+            f"👥 Приглашено друзей: {refs}\n"
+        )
+    await message.answer("\n".join(lines))
+
+
 @router.message(Command("export"))
 async def cmd_export(message: Message) -> None:
     if not is_admin(message.from_user.id):
         return
 
-    rows = db_export_all()
-    if not rows:
+    csv_bytes, count = build_subscribers_csv()
+    if count == 0:
         await message.answer("В базе пока нет подписчиков.")
         return
 
-    tier_map = {"": "Без статуса", "silver": "Серебряный", "gold": "Золотой"}
-
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(
-        ["Telegram ID", "Имя", "Телефон", "Юзернейм", "Дата регистрации", "Визитов", "Статус", "Отзыв оставлен", "Приглашён (ID)"]
-    )
-    for r in rows:
-        writer.writerow(
-            [
-                r["telegram_id"],
-                r["full_name"] or "",
-                r["phone"] or "",
-                r["username"] or "",
-                (r["joined_at"] or "")[:16].replace("T", " "),
-                r["visits_confirmed"] or 0,
-                tier_map.get(r["tier"] or "", r["tier"]),
-                "Да" if r["review_bonus_claimed"] else "Нет",
-                r["referred_by"] or "",
-            ]
-        )
-
-    csv_bytes = buffer.getvalue().encode("utf-8-sig")  # BOM, чтобы Excel правильно показал кириллицу
     filename = f"colizeum_subscribers_{datetime.now(TASHKENT_TZ).date().isoformat()}.csv"
     await message.answer_document(
         BufferedInputFile(csv_bytes, filename=filename),
-        caption=f"Выгрузка подписчиков: {len(rows)} чел.",
+        caption=f"Выгрузка подписчиков: {count} чел.",
     )
 
 
@@ -992,8 +1162,21 @@ async def cmd_wipe_wrong(message: Message) -> None:
 async def cmd_broadcast(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         return
-    await message.answer(
-        "Отправь текст, который нужно разослать всем подписчикам.\nЧтобы отменить — напиши /cancel"
+    await message.answer("Кому отправляем рассылку?", reply_markup=BROADCAST_SEGMENT_KB)
+    await state.set_state(BroadcastState.waiting_segment)
+
+
+@router.callback_query(BroadcastState.waiting_segment, F.data.startswith("bcseg_"))
+async def broadcast_pick_segment(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        return
+    await callback.answer()
+    segment = callback.data.removeprefix("bcseg_")
+    ids = db_segment_ids(segment)
+    await state.update_data(segment=segment)
+    await callback.message.answer(
+        f"Сегмент: {SEGMENT_LABELS.get(segment, segment)} ({len(ids)} чел.)\n\n"
+        "Отправь текст, который нужно разослать.\nЧтобы отменить — напиши /cancel"
     )
     await state.set_state(BroadcastState.waiting_text)
 
@@ -1008,10 +1191,12 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 
 @router.message(BroadcastState.waiting_text)
 async def broadcast_get_text(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    segment = data.get("segment", "all")
+    ids = db_segment_ids(segment)
     await state.update_data(text=message.html_text)
-    count = db_count()
     await message.answer(
-        f"Получатели: {count} чел.\n\n"
+        f"Получатели: {SEGMENT_LABELS.get(segment, segment)} ({len(ids)} чел.)\n\n"
         f"Вот текст сообщения:\n\n{message.text}\n\n"
         f"Отправляем? Напиши ДА для отправки или /cancel для отмены.",
     )
@@ -1022,9 +1207,10 @@ async def broadcast_get_text(message: Message, state: FSMContext) -> None:
 async def broadcast_confirm(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = data["text"]
+    segment = data.get("segment", "all")
     await state.clear()
 
-    ids = db_all_subscriber_ids()
+    ids = db_segment_ids(segment)
     sent, failed = 0, 0
     status_msg = await message.answer(f"Начинаю рассылку на {len(ids)} чел...")
 
@@ -1159,11 +1345,86 @@ async def feedback_loop() -> None:
         await asyncio.sleep(3600)
 
 
+async def winback_loop() -> None:
+    while True:
+        try:
+            for tg_id in db_due_for_winback(WINBACK_DELAY_DAYS, WINBACK_MIN_VISITS):
+                try:
+                    code = db_create_bonus(tg_id, "winback")
+                    await bot.send_message(tg_id, f"{WINBACK_TEXT}\n\n🔑 Код бонуса: {code}")
+                except Exception:
+                    logging.warning("не удалось отправить win-back %s", tg_id)
+                db_mark_winback_sent(tg_id)
+                await asyncio.sleep(0.1)
+        except Exception:
+            logging.exception("ошибка в winback_loop")
+        await asyncio.sleep(3600 * 6)  # проверяем раз в 6 часов
+
+
+def build_subscribers_csv() -> tuple[bytes, int]:
+    rows = db_export_all()
+    tier_map = {"": "Без статуса", "silver": "Серебряный", "gold": "Золотой"}
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        ["Telegram ID", "Имя", "Телефон", "Юзернейм", "Дата регистрации", "Визитов", "Статус", "Отзыв оставлен", "Приглашён (ID)"]
+    )
+    for r in rows:
+        writer.writerow(
+            [
+                r["telegram_id"],
+                r["full_name"] or "",
+                r["phone"] or "",
+                r["username"] or "",
+                (r["joined_at"] or "")[:16].replace("T", " "),
+                r["visits_confirmed"] or 0,
+                tier_map.get(r["tier"] or "", r["tier"]),
+                "Да" if r["review_bonus_claimed"] else "Нет",
+                r["referred_by"] or "",
+            ]
+        )
+    return buffer.getvalue().encode("utf-8-sig"), len(rows)
+
+
+async def backup_loop() -> None:
+    while True:
+        try:
+            last = db_get_setting("last_backup_at")
+            now = datetime.now(TASHKENT_TZ)
+            due = True
+            if last:
+                try:
+                    last_dt = datetime.fromisoformat(last)
+                    due = (now - last_dt).days >= BACKUP_INTERVAL_DAYS
+                except ValueError:
+                    due = True
+
+            if due:
+                csv_bytes, count = build_subscribers_csv()
+                filename = f"colizeum_backup_{now.date().isoformat()}.csv"
+                for admin_id in ADMIN_IDS:
+                    try:
+                        await bot.send_document(
+                            admin_id,
+                            BufferedInputFile(csv_bytes, filename=filename),
+                            caption=f"📦 Еженедельный бэкап базы: {count} подписчиков",
+                        )
+                    except Exception:
+                        logging.warning("не удалось отправить бэкап админу %s", admin_id)
+                db_set_setting("last_backup_at", now.isoformat())
+        except Exception:
+            logging.exception("ошибка в backup_loop")
+        await asyncio.sleep(3600 * 6)  # проверяем раз в 6 часов
+
+
 # ---------- ЗАПУСК ----------
 async def main() -> None:
     db_init()
     asyncio.create_task(reminder_loop())
     asyncio.create_task(feedback_loop())
+    asyncio.create_task(winback_loop())
+    asyncio.create_task(backup_loop())
     await dp.start_polling(bot)
 
 
