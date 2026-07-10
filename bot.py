@@ -9,7 +9,7 @@ import os
 import random
 import sqlite3
 import string
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo
 
@@ -108,6 +108,31 @@ HOOKAH_TEXT = os.environ.get(
 
 DB_PATH = os.environ.get("DB_PATH", "/data/subscribers.db")
 TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
+UTC_TZ = ZoneInfo("UTC")
+
+
+def tashkent_day_range_to_naive_utc(date_from: date, date_to: date) -> tuple[str, str]:
+    """date_from/date_to — календарные даты по Ташкенту, включительно.
+
+    В базе метки времени пишутся как datetime.now().isoformat() — наивные,
+    в часовом поясе сервера (на Railway это UTC). Поэтому границы периода
+    считаем в Ташкенте и переводим в UTC, чтобы сравнение в SQL было верным.
+    """
+    start_local = datetime.combine(date_from, datetime.min.time(), tzinfo=TASHKENT_TZ)
+    end_local = datetime.combine(date_to, datetime.min.time(), tzinfo=TASHKENT_TZ) + timedelta(days=1)
+    start_utc = start_local.astimezone(UTC_TZ).replace(tzinfo=None)
+    end_utc = end_local.astimezone(UTC_TZ).replace(tzinfo=None)
+    return start_utc.isoformat(), end_utc.isoformat()
+
+
+def last_full_week_sat_fri() -> tuple[date, date]:
+    """Последняя полностью завершившаяся неделя Сб–Пт (по Ташкенту)."""
+    today = datetime.now(TASHKENT_TZ).date()
+    this_week_saturday = today - timedelta(days=(today.weekday() - 5) % 7)
+    prev_saturday = this_week_saturday - timedelta(days=7)
+    prev_friday = prev_saturday + timedelta(days=6)
+    return prev_saturday, prev_friday
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMOS_DIR = os.path.join(BASE_DIR, "promos")
 PACKAGES_DIR = os.path.join(BASE_DIR, "packages")
@@ -218,6 +243,8 @@ WHEEL_BUTTON = KeyboardButton(text="🎡 Колесо Фортуны")
 ADMIN_BUTTON_CODE = "🔑 Ввести код"
 ADMIN_BUTTON_FIND = "🔍 Поиск гостя"
 ADMIN_BUTTON_RESET_REVIEW = "♻️ Снять блокировку отзыва"
+OWNER_BUTTON_CODES_PERIOD = "📅 Коды за период"
+OWNER_BUTTON_GUESTS_PERIOD = "📅 Новые гости за период"
 
 
 def guest_menu_rows(user_id: int) -> list[list[KeyboardButton]]:
@@ -239,6 +266,12 @@ def admin_menu_rows() -> list[list[KeyboardButton]]:
     ]
 
 
+def owner_menu_rows() -> list[list[KeyboardButton]]:
+    return [
+        [KeyboardButton(text=OWNER_BUTTON_CODES_PERIOD), KeyboardButton(text=OWNER_BUTTON_GUESTS_PERIOD)],
+    ]
+
+
 def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
     """Собирает главное меню под конкретного пользователя.
 
@@ -248,7 +281,7 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
     - Владелец (OWNER_ID): всё сразу — и гостевые, и админские функции в одном меню.
     """
     if is_owner(user_id):
-        rows = admin_menu_rows() + guest_menu_rows(user_id)
+        rows = admin_menu_rows() + owner_menu_rows() + guest_menu_rows(user_id)
     elif is_admin(user_id):
         rows = admin_menu_rows()
     else:
@@ -665,30 +698,42 @@ def db_set_setting(key: str, value: str) -> None:
     conn.close()
 
 
-def db_export_all() -> list[dict]:
+def db_export_all(date_from_iso: str | None = None, date_to_iso: str | None = None) -> list[dict]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
+    query = (
         "SELECT telegram_id, username, full_name, phone, joined_at, referred_by, "
-        "visits_confirmed, tier, review_bonus_claimed FROM subscribers ORDER BY joined_at"
-    ).fetchall()
+        "visits_confirmed, tier, review_bonus_claimed FROM subscribers"
+    )
+    params: list[str] = []
+    if date_from_iso and date_to_iso:
+        query += " WHERE joined_at >= ? AND joined_at < ?"
+        params = [date_from_iso, date_to_iso]
+    query += " ORDER BY joined_at"
+    rows = conn.execute(query, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def db_export_all_bonuses() -> list[dict]:
+def db_export_all_bonuses(date_from_iso: str | None = None, date_to_iso: str | None = None) -> list[dict]:
+    """Без периода — все коды. С периодом — коды, ПОГАШЕННЫЕ в этот период
+    (сравниваем именно с датой погашения, т.к. отчёт нужен для сверки с CRM,
+    где запись делается в момент погашения кода, а не создания)."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        """
+    query = """
         SELECT
             b.code, b.bonus_type, b.created_at, b.used_at, b.used_by_admin,
             s.telegram_id, s.full_name, s.phone
         FROM bonuses b
         LEFT JOIN subscribers s ON s.telegram_id = b.telegram_id
-        ORDER BY b.created_at DESC
-        """
-    ).fetchall()
+    """
+    params: list[str] = []
+    if date_from_iso and date_to_iso:
+        query += " WHERE b.used_at >= ? AND b.used_at < ?"
+        params = [date_from_iso, date_to_iso]
+    query += " ORDER BY b.created_at DESC"
+    rows = conn.execute(query, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -782,6 +827,10 @@ class AdminFlow(StatesGroup):
     waiting_code = State()
     waiting_find = State()
     waiting_reset_review = State()
+
+
+class PeriodExportState(StatesGroup):
+    waiting_range = State()
 
 
 # ---------- ВСПОМОГАТЕЛЬНОЕ ----------
@@ -1108,6 +1157,106 @@ async def admin_btn_reset_review(message: Message, state: FSMContext) -> None:
 async def admin_flow_reset_review(message: Message, state: FSMContext) -> None:
     await state.clear()
     await do_reset_review(message, (message.text or "").strip())
+
+
+def period_picker_kb(kind: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📆 Прошлая неделя (Сб–Пт)", callback_data=f"prd:{kind}:lastweek")],
+            [InlineKeyboardButton(text="📆 Последние 7 дней", callback_data=f"prd:{kind}:7d")],
+            [InlineKeyboardButton(text="✏️ Свой период", callback_data=f"prd:{kind}:custom")],
+        ]
+    )
+
+
+async def send_period_export(message: Message, kind: str, date_from: date, date_to: date) -> None:
+    start_iso, end_iso = tashkent_day_range_to_naive_utc(date_from, date_to)
+    period_label = f"{date_from.strftime('%d.%m.%Y')}–{date_to.strftime('%d.%m.%Y')}"
+
+    if kind == "codes":
+        csv_bytes, count = build_bonuses_csv(start_iso, end_iso)
+        noun = "погашенных кодов"
+        prefix = "colizeum_codes"
+    else:
+        csv_bytes, count = build_subscribers_csv(start_iso, end_iso)
+        noun = "новых гостей"
+        prefix = "colizeum_new_guests"
+
+    if count == 0:
+        await message.answer(f"За период {period_label} — {noun}: 0. Файл не создаю.")
+        return
+
+    filename = f"{prefix}_{date_from.isoformat()}_{date_to.isoformat()}.csv"
+    await message.answer_document(
+        BufferedInputFile(csv_bytes, filename=filename),
+        caption=f"{period_label}: {count} ({noun}).",
+    )
+
+
+@router.message(F.text == OWNER_BUTTON_CODES_PERIOD)
+async def owner_btn_codes_period(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    await message.answer("За какой период выгрузить погашенные коды?", reply_markup=period_picker_kb("codes"))
+
+
+@router.message(F.text == OWNER_BUTTON_GUESTS_PERIOD)
+async def owner_btn_guests_period(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    await message.answer(
+        "За какой период выгрузить новых зарегистрированных гостей?", reply_markup=period_picker_kb("guests")
+    )
+
+
+@router.callback_query(F.data.startswith("prd:"))
+async def cb_period_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Недоступно", show_alert=True)
+        return
+
+    _, kind, preset = callback.data.split(":", 2)
+
+    if preset == "custom":
+        await state.update_data(period_kind=kind)
+        await state.set_state(PeriodExportState.waiting_range)
+        await callback.message.edit_text(
+            "Пришли период в формате ДД.ММ.ГГГГ-ДД.ММ.ГГГГ\nНапример: 01.07.2026-08.07.2026"
+        )
+        await callback.answer()
+        return
+
+    if preset == "lastweek":
+        date_from, date_to = last_full_week_sat_fri()
+    else:  # "7d"
+        today = datetime.now(TASHKENT_TZ).date()
+        date_from, date_to = today - timedelta(days=6), today
+
+    await callback.answer("Собираю файл...")
+    await send_period_export(callback.message, kind, date_from, date_to)
+
+
+@router.message(PeriodExportState.waiting_range)
+async def period_export_custom_range(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    kind = data.get("period_kind", "codes")
+    await state.clear()
+
+    text = (message.text or "").strip().replace(" ", "")
+    parts = text.split("-")
+    if len(parts) != 2:
+        await message.answer("Не понял формат. Пример: 01.07.2026-08.07.2026")
+        return
+    try:
+        date_from = datetime.strptime(parts[0], "%d.%m.%Y").date()
+        date_to = datetime.strptime(parts[1], "%d.%m.%Y").date()
+    except ValueError:
+        await message.answer("Не понял даты. Пример: 01.07.2026-08.07.2026")
+        return
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+
+    await send_period_export(message, kind, date_from, date_to)
 
 
 @router.message(Command("stats"))
@@ -2006,8 +2155,8 @@ async def winback_loop() -> None:
         await asyncio.sleep(3600 * 6)  # проверяем раз в 6 часов
 
 
-def build_subscribers_csv() -> tuple[bytes, int]:
-    rows = db_export_all()
+def build_subscribers_csv(date_from_iso: str | None = None, date_to_iso: str | None = None) -> tuple[bytes, int]:
+    rows = db_export_all(date_from_iso, date_to_iso)
     tier_map = {"": "Без статуса", "silver": "Серебряный", "gold": "Золотой"}
 
     buffer = io.StringIO()
@@ -2032,8 +2181,8 @@ def build_subscribers_csv() -> tuple[bytes, int]:
     return buffer.getvalue().encode("utf-8-sig"), len(rows)
 
 
-def build_bonuses_csv() -> tuple[bytes, int]:
-    rows = db_export_all_bonuses()
+def build_bonuses_csv(date_from_iso: str | None = None, date_to_iso: str | None = None) -> tuple[bytes, int]:
+    rows = db_export_all_bonuses(date_from_iso, date_to_iso)
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
