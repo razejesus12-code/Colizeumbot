@@ -154,6 +154,9 @@ BONUS_AMOUNTS = {
 }
 
 TIER_SILVER_VISITS = int(os.environ.get("TIER_SILVER_VISITS", "10"))
+# минимальная сумма пополнения (сум), при которой чек-ин засчитывается визитом —
+# защита от абуза "зашёл на 5 минут, пополнил по минимуму, вышел"
+MIN_CHECKIN_AMOUNT = int(os.environ.get("MIN_CHECKIN_AMOUNT", "50000"))
 TIER_GOLD_VISITS = int(os.environ.get("TIER_GOLD_VISITS", "25"))
 TIER_SILVER_TEXT = os.environ.get(
     "TIER_SILVER_TEXT",
@@ -212,12 +215,12 @@ PENDING_REFERRALS: dict[int, int] = {}
 WHEEL_BUTTON = KeyboardButton(text="🎡 Колесо Фортуны")
 
 
-def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
-    """Собирает главное меню под конкретного гостя.
+ADMIN_BUTTON_CODE = "🔑 Ввести код"
+ADMIN_BUTTON_FIND = "🔍 Поиск гостя"
+ADMIN_BUTTON_RESET_REVIEW = "♻️ Снять блокировку отзыва"
 
-    Колесо Фортуны показываем только тем, кто уже дорос до нужного статуса
-    (см. WHEEL_MIN_TIER) — до этого кнопка новому гостю просто не видна.
-    """
+
+def guest_menu_rows(user_id: int) -> list[list[KeyboardButton]]:
     rows = [
         [KeyboardButton(text="🎉 Акции"), KeyboardButton(text="📍 Клуб")],
         [KeyboardButton(text="👥 Пригласить друга"), KeyboardButton(text="🧾 Прайс")],
@@ -226,7 +229,32 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
     tier = db_get_tier(user_id)
     if TIER_RANK.get(tier, 0) >= WHEEL_MIN_TIER_RANK:
         rows.append([WHEEL_BUTTON])
+    return rows
+
+
+def admin_menu_rows() -> list[list[KeyboardButton]]:
+    return [
+        [KeyboardButton(text=ADMIN_BUTTON_CODE), KeyboardButton(text=ADMIN_BUTTON_FIND)],
+        [KeyboardButton(text=ADMIN_BUTTON_RESET_REVIEW)],
+    ]
+
+
+def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
+    """Собирает главное меню под конкретного пользователя.
+
+    - Обычный гость: только гостевые функции (Колесо Фортуны — только с нужного статуса).
+    - Админ (ADMIN_IDS): только рабочие функции учёта — код, поиск гостя, снятие
+      блокировки отзыва. Акции/статусы/колесо им для работы не нужны.
+    - Владелец (OWNER_ID): всё сразу — и гостевые, и админские функции в одном меню.
+    """
+    if is_owner(user_id):
+        rows = admin_menu_rows() + guest_menu_rows(user_id)
+    elif is_admin(user_id):
+        rows = admin_menu_rows()
+    else:
+        rows = guest_menu_rows(user_id)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
 
 _review_buttons = []
 if REVIEW_LINK_2GIS:
@@ -402,6 +430,15 @@ def db_create_bonus(telegram_id: int, bonus_type: str) -> str:
     conn.commit()
     conn.close()
     return code
+
+
+def db_peek_bonus(code: str) -> dict | None:
+    """Смотрит на код бонуса, не помечая его использованным."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM bonuses WHERE code = ?", (code,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def db_redeem_bonus(code: str, admin_id: int) -> tuple[str, dict | None]:
@@ -639,13 +676,32 @@ def db_export_all() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def db_export_all_bonuses() -> list[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT
+            b.code, b.bonus_type, b.created_at, b.used_at, b.used_by_admin,
+            s.telegram_id, s.full_name, s.phone
+        FROM bonuses b
+        LEFT JOIN subscribers s ON s.telegram_id = b.telegram_id
+        ORDER BY b.created_at DESC
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def db_find_by_phone(query: str) -> list[dict]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT telegram_id, username, full_name, phone, joined_at, referred_by, "
-        "visits_confirmed, tier FROM subscribers WHERE phone LIKE ? ORDER BY joined_at DESC",
-        (f"%{query}%",),
+        "visits_confirmed, tier FROM subscribers "
+        "WHERE phone LIKE ? OR CAST(telegram_id AS TEXT) LIKE ? "
+        "ORDER BY joined_at DESC",
+        (f"%{query}%", f"%{query}%"),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -661,6 +717,24 @@ def db_get_subscriber_by_id(telegram_id: int) -> dict | None:
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def resolve_guest(identifier: str) -> tuple[dict | None, list[dict]]:
+    """Ищет гостя по точному telegram_id или по (части) номера телефона.
+
+    Возвращает (гость, []) при однозначном совпадении,
+    либо (None, список_совпадений) если нашлось 0 или несколько.
+    """
+    identifier = identifier.strip()
+    digits = "".join(ch for ch in identifier if ch.isdigit())
+    if digits:
+        target = db_get_subscriber_by_id(int(digits))
+        if target:
+            return target, []
+    matches = db_find_by_phone(digits or identifier)
+    if len(matches) == 1:
+        return matches[0], []
+    return None, matches
 
 
 # ---------- СОСТОЯНИЯ ----------
@@ -700,6 +774,16 @@ class WipeAllState(StatesGroup):
 WIPE_CONFIRM_PHRASE = "УДАЛИТЬ ВСЕХ"
 
 
+class WinbackNowState(StatesGroup):
+    waiting_confirm = State()
+
+
+class AdminFlow(StatesGroup):
+    waiting_code = State()
+    waiting_find = State()
+    waiting_reset_review = State()
+
+
 # ---------- ВСПОМОГАТЕЛЬНОЕ ----------
 def get_bonus_text_and_type() -> tuple[str, str]:
     now = datetime.now(TASHKENT_TZ)
@@ -729,6 +813,13 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
 
     if db_is_subscriber(user_id):
         await message.answer("Ты уже с нами! 🎮 Вот меню:", reply_markup=main_menu_kb(user_id))
+        return
+
+    if is_admin(user_id):
+        await message.answer(
+            "Привет! Это рабочий доступ Colizeum Bot 🛠\nВводи коды гостей, ищи гостей, снимай блокировки отзывов.",
+            reply_markup=main_menu_kb(user_id),
+        )
         return
 
     kb = ReplyKeyboardMarkup(
@@ -903,6 +994,7 @@ async def menu_checkin(message: Message) -> None:
     await message.answer(
         "Покажи этот код администратору, чтобы засчитать визит 📍\n\n"
         f"🔑 Код: {code}\n\n"
+        f"Визит засчитывается при пополнении баланса от {MIN_CHECKIN_AMOUNT} сум.\n"
         "Так мы отслеживаем твои визиты для статуса постоянного гостя 🏆"
     )
 
@@ -976,6 +1068,48 @@ def is_owner(telegram_id: int) -> bool:
     return OWNER_ID != 0 and telegram_id == OWNER_ID
 
 
+@router.message(F.text == ADMIN_BUTTON_CODE)
+async def admin_btn_code(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(AdminFlow.waiting_code)
+    await message.answer("Пришли код гостя (например AB12CD):")
+
+
+@router.message(AdminFlow.waiting_code)
+async def admin_flow_code(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await do_redeem(message, (message.text or "").strip())
+
+
+@router.message(F.text == ADMIN_BUTTON_FIND)
+async def admin_btn_find(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(AdminFlow.waiting_find)
+    await message.answer("Пришли номер телефона или Telegram ID гостя (можно частично):")
+
+
+@router.message(AdminFlow.waiting_find)
+async def admin_flow_find(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await do_find(message, (message.text or "").strip())
+
+
+@router.message(F.text == ADMIN_BUTTON_RESET_REVIEW)
+async def admin_btn_reset_review(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(AdminFlow.waiting_reset_review)
+    await message.answer("Пришли Telegram ID гостя, которому снять блокировку отзыва:")
+
+
+@router.message(AdminFlow.waiting_reset_review)
+async def admin_flow_reset_review(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await do_reset_review(message, (message.text or "").strip())
+
+
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
     if not is_admin(message.from_user.id):
@@ -994,6 +1128,118 @@ async def cmd_stats(message: Message) -> None:
     )
 
 
+async def apply_confirmed_checkin(guest_id: int) -> str:
+    """Засчитывает визит гостю (визиты/статус/уведомления).
+
+    Вызывается только после того, как админ подтвердил визит кнопкой
+    и сумма пополнения оказалась не меньше MIN_CHECKIN_AMOUNT.
+    Возвращает текст-дополнение для итогового сообщения администратору.
+    """
+    visits = db_increment_visits(guest_id)
+    db_set_last_checkin(guest_id)
+    if visits == 1:
+        db_set_first_checkin(guest_id)
+    current_tier = db_get_tier(guest_id)
+    new_tier = None
+    if visits >= TIER_GOLD_VISITS and current_tier != "gold":
+        new_tier = "gold"
+    elif visits >= TIER_SILVER_VISITS and current_tier not in ("silver", "gold"):
+        new_tier = "silver"
+
+    extra = f"\nВизитов у гостя: {visits}"
+
+    if new_tier:
+        db_set_tier(guest_id, new_tier)
+        tier_text = TIER_GOLD_TEXT if new_tier == "gold" else TIER_SILVER_TEXT
+        tier_code = db_create_bonus(guest_id, f"tier_{new_tier}")
+        try:
+            await bot.send_message(
+                guest_id,
+                f"{tier_text}\n\n🔑 Код бонуса: {tier_code}",
+                reply_markup=main_menu_kb(guest_id),
+            )
+        except Exception:
+            logging.warning("не удалось уведомить гостя %s о новом статусе", guest_id)
+        extra += f"\n🎉 Гость получил новый статус: {TIER_LABELS.get(new_tier, new_tier)}!"
+
+        if new_tier == "gold":
+            conn = sqlite3.connect(DB_PATH)
+            phone_row = conn.execute(
+                "SELECT phone, full_name FROM subscribers WHERE telegram_id = ?", (guest_id,)
+            ).fetchone()
+            conn.close()
+            phone = phone_row[0] if phone_row else "неизвестен"
+            name = phone_row[1] if phone_row else ""
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(
+                        admin_id,
+                        "🥇 Новый Золотой гость!\n\n"
+                        f"Имя: {name}\nТелефон: {phone}\n\n"
+                        "Не забудьте вручную проставить постоянную скидку 10% в CRM клуба "
+                        "(бот не имеет доступа к CRM и не может сделать это сам).",
+                    )
+                except Exception:
+                    logging.warning("не удалось уведомить админа %s", admin_id)
+
+    return extra
+
+
+async def do_redeem(message: Message, code: str) -> None:
+    code = code.strip().upper()
+    if not code:
+        await message.answer("Пришли код гостя (например AB12CD).")
+        return
+
+    row = db_peek_bonus(code)
+
+    if row is None:
+        await message.answer("❌ Код не найден. Проверьте, правильно ли он введён.")
+        return
+
+    if row["used_at"]:
+        used_at = row["used_at"][:16].replace("T", " ")
+        label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
+        amount = BONUS_AMOUNTS.get(row["bonus_type"])
+        amount_line = f"\nБонус: {amount}" if amount else ""
+        await message.answer(f"⚠️ Этот код уже был погашен {used_at}.\nТип бонуса: {label}{amount_line}")
+        return
+
+    if row["bonus_type"] == "checkin":
+        guest = db_get_subscriber_by_id(row["telegram_id"])
+        guest_name = guest["full_name"] if guest else "без имени"
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"ckc:{code}"),
+                    InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ckr:{code}"),
+                ]
+            ]
+        )
+        await message.answer(
+            f"👤 Гость: {guest_name}\n"
+            f"🆔 {row['telegram_id']}\n\n"
+            f"Пополнил от {MIN_CHECKIN_AMOUNT} сум? Подтверди визит:",
+            reply_markup=kb,
+        )
+        return
+
+    # обычные бонусы (не чек-ин) — гасим сразу, без доп. подтверждения
+    status, redeemed = db_redeem_bonus(code, message.from_user.id)
+    if status == "not_found":
+        await message.answer("❌ Код не найден. Проверьте, правильно ли он введён.")
+        return
+    if status == "already_used":
+        await message.answer("⚠️ Этот код только что кто-то уже погасил.")
+        return
+
+    label = BONUS_LABELS.get(redeemed["bonus_type"], redeemed["bonus_type"])
+    amount = BONUS_AMOUNTS.get(redeemed["bonus_type"])
+    amount_line = f"\n💰 Начислить: {amount}" if amount else ""
+    await message.answer(f"✅ Бонус активирован!\nТип: {label}{amount_line}\nID гостя: {redeemed['telegram_id']}")
+
+
 @router.message(Command("redeem"))
 async def cmd_redeem(message: Message, command: CommandObject) -> None:
     if not is_admin(message.from_user.id):
@@ -1004,89 +1250,54 @@ async def cmd_redeem(message: Message, command: CommandObject) -> None:
         await message.answer("Использование: /redeem КОД\n(код гость показывает из своего бонусного сообщения)")
         return
 
-    status, row = db_redeem_bonus(code, message.from_user.id)
+    await do_redeem(message, code)
+
+
+@router.callback_query(F.data.startswith("ckc:"))
+async def cb_checkin_confirm(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недоступно", show_alert=True)
+        return
+
+    code = callback.data.split(":", 1)[1] if ":" in callback.data else ""
+    status, row = db_redeem_bonus(code, callback.from_user.id)
 
     if status == "not_found":
-        await message.answer("❌ Код не найден. Проверьте, правильно ли он введён.")
+        await callback.message.edit_text("❌ Код не найден (возможно, уже удалён).")
+        await callback.answer()
         return
-
     if status == "already_used":
-        used_at = row["used_at"][:16].replace("T", " ")
-        label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
-        amount = BONUS_AMOUNTS.get(row["bonus_type"])
-        amount_line = f"\nБонус: {amount}" if amount else ""
-        await message.answer(f"⚠️ Этот код уже был погашен {used_at}.\nТип бонуса: {label}{amount_line}")
+        await callback.message.edit_text("⚠️ Этот код уже был погашен ранее — повторно засчитать нельзя.")
+        await callback.answer()
         return
 
-    label = BONUS_LABELS.get(row["bonus_type"], row["bonus_type"])
+    guest_id = row["telegram_id"]
+    guest = db_get_subscriber_by_id(guest_id)
+    guest_name = guest["full_name"] if guest else "без имени"
 
-    if row["bonus_type"] == "checkin":
-        reply = f"✅ Визит подтверждён (без денежного бонуса)\nID гостя: {row['telegram_id']}"
-    else:
-        amount = BONUS_AMOUNTS.get(row["bonus_type"])
-        amount_line = f"\n💰 Начислить: {amount}" if amount else ""
-        reply = f"✅ Бонус активирован!\nТип: {label}{amount_line}\nID гостя: {row['telegram_id']}"
+    extra = await apply_confirmed_checkin(guest_id)
+    text = f"✅ Визит подтверждён\n👤 {guest_name}\n🆔 {guest_id}{extra}"
 
-    if row["bonus_type"] == "checkin":
-        guest_id = row["telegram_id"]
-        visits = db_increment_visits(guest_id)
-        db_set_last_checkin(guest_id)
-        if visits == 1:
-            db_set_first_checkin(guest_id)
-        current_tier = db_get_tier(guest_id)
-        new_tier = None
-        if visits >= TIER_GOLD_VISITS and current_tier != "gold":
-            new_tier = "gold"
-        elif visits >= TIER_SILVER_VISITS and current_tier not in ("silver", "gold"):
-            new_tier = "silver"
-
-        reply += f"\nВизитов у гостя: {visits}"
-
-        if new_tier:
-            db_set_tier(guest_id, new_tier)
-            tier_text = TIER_GOLD_TEXT if new_tier == "gold" else TIER_SILVER_TEXT
-            tier_code = db_create_bonus(guest_id, f"tier_{new_tier}")
-            try:
-                await bot.send_message(
-                    guest_id,
-                    f"{tier_text}\n\n🔑 Код бонуса: {tier_code}",
-                    reply_markup=main_menu_kb(guest_id),
-                )
-            except Exception:
-                logging.warning("не удалось уведомить гостя %s о новом статусе", guest_id)
-            reply += f"\n🎉 Гость получил новый статус: {TIER_LABELS.get(new_tier, new_tier)}!"
-
-            if new_tier == "gold":
-                conn = sqlite3.connect(DB_PATH)
-                phone_row = conn.execute(
-                    "SELECT phone, full_name FROM subscribers WHERE telegram_id = ?", (guest_id,)
-                ).fetchone()
-                conn.close()
-                phone = phone_row[0] if phone_row else "неизвестен"
-                name = phone_row[1] if phone_row else ""
-                for admin_id in ADMIN_IDS:
-                    try:
-                        await bot.send_message(
-                            admin_id,
-                            "🥇 Новый Золотой гость!\n\n"
-                            f"Имя: {name}\nТелефон: {phone}\n\n"
-                            "Не забудьте вручную проставить постоянную скидку 10% в CRM клуба "
-                            "(бот не имеет доступа к CRM и не может сделать это сам).",
-                        )
-                    except Exception:
-                        logging.warning("не удалось уведомить админа %s", admin_id)
-
-    await message.answer(reply)
+    await callback.message.edit_text(text)
+    await callback.answer("Готово")
 
 
-@router.message(Command("find"))
-async def cmd_find(message: Message, command: CommandObject) -> None:
-    if not is_admin(message.from_user.id):
+@router.callback_query(F.data.startswith("ckr:"))
+async def cb_checkin_reject(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недоступно", show_alert=True)
         return
+    code = callback.data.split(":", 1)[1] if ":" in callback.data else ""
+    await callback.message.edit_text(
+        f"❌ Отклонено — код {code} не погашен, гость может показать его ещё раз."
+    )
+    await callback.answer()
 
-    query = (command.args or "").strip()
+
+async def do_find(message: Message, query: str) -> None:
+    query = query.strip()
     if not query:
-        await message.answer("Использование: /find НОМЕР\n(можно вводить часть номера, без +998 тоже сработает)")
+        await message.answer("Пришли номер телефона или Telegram ID гостя (можно частично).")
         return
 
     # уберём пробелы/скобки/дефисы, чтобы поиск был терпимее к формату ввода
@@ -1094,7 +1305,7 @@ async def cmd_find(message: Message, command: CommandObject) -> None:
     matches = db_find_by_phone(query_clean or query)
 
     if not matches:
-        await message.answer("Никого не нашёл по этому номеру.")
+        await message.answer("Никого не нашёл по этому номеру/ID.")
         return
 
     tier_map = {"": "Без статуса", "silver": "🥈 Серебряный", "gold": "🥇 Золотой"}
@@ -1114,6 +1325,19 @@ async def cmd_find(message: Message, command: CommandObject) -> None:
             f"👥 Приглашено друзей: {refs}\n"
         )
     await message.answer("\n".join(lines))
+
+
+@router.message(Command("find"))
+async def cmd_find(message: Message, command: CommandObject) -> None:
+    if not is_admin(message.from_user.id):
+        return
+
+    query = (command.args or "").strip()
+    if not query:
+        await message.answer("Использование: /find НОМЕР_ИЛИ_ID\n(можно вводить часть номера, без +998 тоже сработает)")
+        return
+
+    await do_find(message, query)
 
 
 TIER_ALIASES = {
@@ -1201,6 +1425,142 @@ async def cmd_setstatus(message: Message, command: CommandObject) -> None:
         )
 
 
+def _no_match_reply(matches: list[dict]) -> str:
+    if not matches:
+        return "Не нашёл гостя ни по ID, ни по номеру телефона."
+    lines = [f"Нашёл {len(matches)} совпадений, уточни номер:\n"]
+    for g in matches[:10]:
+        lines.append(f"🆔 {g['telegram_id']} — {g['full_name'] or 'без имени'} — 📞 {g['phone']}")
+    return "\n".join(lines)
+
+
+@router.message(Command("test_feedback"))
+async def cmd_test_feedback(message: Message, command: CommandObject) -> None:
+    # тестовая отправка одному гостю — не трогает db_due_for_feedback,
+    # автоматический цикл этому же гостю позже сработает как обычно
+    if not is_owner(message.from_user.id):
+        return
+    identifier = (command.args or "").strip()
+    if not identifier:
+        await message.answer("Использование: /test_feedback НОМЕР_ИЛИ_ID")
+        return
+    target, matches = resolve_guest(identifier)
+    if not target:
+        await message.answer(_no_match_reply(matches))
+        return
+    try:
+        await bot.send_message(target["telegram_id"], FEEDBACK_PROMPT_TEXT, reply_markup=FEEDBACK_KB)
+        await message.answer(f"✅ Тестовый запрос обратной связи отправлен: {target['full_name'] or target['telegram_id']}")
+    except Exception:
+        await message.answer("❌ Не получилось отправить — возможно, гость ещё не запускал бота или заблокировал его.")
+
+
+@router.message(Command("test_reminder"))
+async def cmd_test_reminder(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    identifier = (command.args or "").strip()
+    if not identifier:
+        await message.answer("Использование: /test_reminder НОМЕР_ИЛИ_ID")
+        return
+    target, matches = resolve_guest(identifier)
+    if not target:
+        await message.answer(_no_match_reply(matches))
+        return
+    try:
+        code = db_create_bonus(target["telegram_id"], "reminder")
+        await bot.send_message(target["telegram_id"], f"{REMINDER_TEXT}\n\n🔑 Код бонуса: {code}")
+        await message.answer(f"✅ Тестовое напоминание отправлено: {target['full_name'] or target['telegram_id']}\n🔑 Код (реальный, погашаемый): {code}")
+    except Exception:
+        await message.answer("❌ Не получилось отправить — возможно, гость ещё не запускал бота или заблокировал его.")
+
+
+@router.message(Command("test_winback"))
+async def cmd_test_winback(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    identifier = (command.args or "").strip()
+    if not identifier:
+        await message.answer("Использование: /test_winback НОМЕР_ИЛИ_ID")
+        return
+    target, matches = resolve_guest(identifier)
+    if not target:
+        await message.answer(_no_match_reply(matches))
+        return
+    try:
+        code = db_create_bonus(target["telegram_id"], "winback")
+        await bot.send_message(target["telegram_id"], f"{WINBACK_TEXT}\n\n🔑 Код бонуса: {code}")
+        await message.answer(f"✅ Тестовый win-back отправлен: {target['full_name'] or target['telegram_id']}\n🔑 Код (реальный, погашаемый): {code}")
+    except Exception:
+        await message.answer("❌ Не получилось отправить — возможно, гость ещё не запускал бота или заблокировал его.")
+
+
+@router.message(Command("winback_preview"))
+async def cmd_winback_preview(message: Message) -> None:
+    # ничего не отправляет — просто показывает, кому прямо сейчас
+    # ушло бы win-back-сообщение, если запустить рассылку
+    if not is_owner(message.from_user.id):
+        return
+    ids = db_due_for_winback(WINBACK_DELAY_DAYS, WINBACK_MIN_VISITS)
+    if not ids:
+        await message.answer("Сейчас никто не подходит под условия win-back (никого не пропустили).")
+        return
+    lines = [f"Под win-back сейчас подходит: {len(ids)} чел.\n"]
+    for tg_id in ids[:15]:
+        g = db_get_subscriber_by_id(tg_id)
+        if g:
+            lines.append(f"🆔 {g['telegram_id']} — {g['full_name'] or 'без имени'} — 📞 {g['phone']}")
+    if len(ids) > 15:
+        lines.append(f"...и ещё {len(ids) - 15}")
+    lines.append("\nЧтобы реально разослать всем этим гостям — /run_winback_now")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("run_winback_now"))
+async def cmd_run_winback_now(message: Message, state: FSMContext) -> None:
+    # реальная массовая рассылка win-back прямо сейчас (не ждём авто-цикл раз в 6 часов),
+    # тем же гостям, что видно в /winback_preview — требует подтверждения, необратимо
+    if not is_owner(message.from_user.id):
+        return
+    ids = db_due_for_winback(WINBACK_DELAY_DAYS, WINBACK_MIN_VISITS)
+    if not ids:
+        await message.answer("Сейчас никто не подходит под условия win-back — рассылать некому.")
+        return
+    await state.update_data(winback_ids=ids)
+    await message.answer(
+        f"⚠️ Сейчас уйдёт реальная рассылка {len(ids)} гостям (не тест).\n"
+        "Чтобы подтвердить, напиши ДА\n"
+        "Чтобы отменить — /cancel"
+    )
+    await state.set_state(WinbackNowState.waiting_confirm)
+
+
+@router.message(WinbackNowState.waiting_confirm, Command("cancel"))
+async def cmd_run_winback_cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Отменено, никому ничего не ушло.")
+
+
+@router.message(WinbackNowState.waiting_confirm, F.text.upper() == "ДА")
+async def cmd_run_winback_confirm(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    ids = data.get("winback_ids", [])
+    await state.clear()
+
+    sent = 0
+    for tg_id in ids:
+        try:
+            code = db_create_bonus(tg_id, "winback")
+            await bot.send_message(tg_id, f"{WINBACK_TEXT}\n\n🔑 Код бонуса: {code}")
+            sent += 1
+        except Exception:
+            logging.warning("не удалось отправить win-back %s", tg_id)
+        db_mark_winback_sent(tg_id)
+        await asyncio.sleep(0.1)
+
+    await message.answer(f"✅ Готово. Win-back отправлен: {sent} из {len(ids)}.")
+
+
 @router.message(Command("export"))
 async def cmd_export(message: Message) -> None:
     if not is_admin(message.from_user.id):
@@ -1215,6 +1575,23 @@ async def cmd_export(message: Message) -> None:
     await message.answer_document(
         BufferedInputFile(csv_bytes, filename=filename),
         caption=f"Выгрузка подписчиков: {count} чел.",
+    )
+
+
+@router.message(Command("export_codes"))
+async def cmd_export_codes(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+
+    csv_bytes, count = build_bonuses_csv()
+    if count == 0:
+        await message.answer("Кодов пока нет.")
+        return
+
+    filename = f"colizeum_codes_{datetime.now(TASHKENT_TZ).date().isoformat()}.csv"
+    await message.answer_document(
+        BufferedInputFile(csv_bytes, filename=filename),
+        caption=f"Выгрузка кодов бонусов: {count} шт. — для сверки с CRM.",
     )
 
 
@@ -1233,6 +1610,16 @@ async def cmd_vip(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 
+async def do_reset_review(message: Message, arg: str) -> None:
+    arg = arg.strip()
+    if not arg.isdigit():
+        await message.answer("Это должен быть числовой Telegram ID гостя.")
+        return
+    telegram_id = int(arg)
+    db_reset_review_claim(telegram_id)
+    await message.answer(f"Готово ✅ Гость {telegram_id} снова может получить бонус за отзыв.")
+
+
 @router.message(Command("reset_review"))
 async def cmd_reset_review(message: Message, command: CommandObject) -> None:
     if not is_admin(message.from_user.id):
@@ -1244,9 +1631,7 @@ async def cmd_reset_review(message: Message, command: CommandObject) -> None:
             "(снимает отметку «бонус за отзыв уже получен» у гостя, чтобы он мог попробовать снова)"
         )
         return
-    telegram_id = int(arg)
-    db_reset_review_claim(telegram_id)
-    await message.answer(f"Готово ✅ Гость {telegram_id} снова может получить бонус за отзыв.")
+    await do_reset_review(message, arg)
 
 
 @router.message(Command("delete_all_users"))
@@ -1312,7 +1697,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         return
     await state.clear()
-    await message.answer("Рассылка отменена.")
+    await message.answer("Отменено.")
 
 
 @router.message(BroadcastState.waiting_text)
@@ -1642,6 +2027,38 @@ def build_subscribers_csv() -> tuple[bytes, int]:
                 tier_map.get(r["tier"] or "", r["tier"]),
                 "Да" if r["review_bonus_claimed"] else "Нет",
                 r["referred_by"] or "",
+            ]
+        )
+    return buffer.getvalue().encode("utf-8-sig"), len(rows)
+
+
+def build_bonuses_csv() -> tuple[bytes, int]:
+    rows = db_export_all_bonuses()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "Код", "Тип бонуса", "Размер", "Статус",
+            "Имя гостя", "Телефон", "Telegram ID",
+            "Создан", "Погашен", "Кем погашен (admin ID)",
+        ]
+    )
+    for r in rows:
+        label = BONUS_LABELS.get(r["bonus_type"], r["bonus_type"])
+        amount = BONUS_AMOUNTS.get(r["bonus_type"], "")
+        writer.writerow(
+            [
+                r["code"],
+                label,
+                amount,
+                "Использован" if r["used_at"] else "Не использован",
+                r["full_name"] or "",
+                r["phone"] or "",
+                r["telegram_id"] or "",
+                (r["created_at"] or "")[:16].replace("T", " "),
+                (r["used_at"] or "")[:16].replace("T", " ") if r["used_at"] else "",
+                r["used_by_admin"] or "",
             ]
         )
     return buffer.getvalue().encode("utf-8-sig"), len(rows)
