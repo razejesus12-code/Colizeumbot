@@ -247,6 +247,7 @@ dp.include_router(router)
 PENDING_REFERRALS: dict[int, int] = {}
 
 WHEEL_BUTTON = KeyboardButton(text="🎡 Колесо Фортуны")
+WHEEL_BUTTON_LOCKED = KeyboardButton(text="🔒 Колесо Фортуны")
 
 
 ADMIN_BUTTON_CODE = "🔑 Ввести код"
@@ -265,6 +266,8 @@ def guest_menu_rows(user_id: int) -> list[list[KeyboardButton]]:
     tier = db_get_tier(user_id)
     if TIER_RANK.get(tier, 0) >= WHEEL_MIN_TIER_RANK:
         rows.append([WHEEL_BUTTON])
+    else:
+        rows.append([WHEEL_BUTTON_LOCKED])
     return rows
 
 
@@ -1106,7 +1109,7 @@ async def menu_status(message: Message) -> None:
     )
 
 
-@router.message(F.text == "🎡 Колесо Фортуны")
+@router.message(F.text.in_({"🎡 Колесо Фортуны", "🔒 Колесо Фортуны"}))
 async def menu_wheel(message: Message) -> None:
     user_id = message.from_user.id
     elig = wheel_eligibility(user_id)
@@ -1159,7 +1162,7 @@ _ESCAPE_MENU_TEXTS = {
     ADMIN_BUTTON_CODE, ADMIN_BUTTON_FIND, ADMIN_BUTTON_RESET_REVIEW,
     OWNER_BUTTON_CODES_PERIOD, OWNER_BUTTON_GUESTS_PERIOD,
     "🎉 Акции", "📍 Клуб", "👥 Пригласить друга", "🧾 Прайс",
-    "✅ Я в клубе", "💎 Мой статус", WHEEL_BUTTON.text,
+    "✅ Я в клубе", "💎 Мой статус", WHEEL_BUTTON.text, WHEEL_BUTTON_LOCKED.text,
 }
 
 
