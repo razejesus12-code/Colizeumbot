@@ -1125,8 +1125,38 @@ async def admin_btn_code(message: Message, state: FSMContext) -> None:
     await message.answer("Пришли код гостя (например AB12CD):")
 
 
+_ESCAPE_MENU_TEXTS = {
+    ADMIN_BUTTON_CODE, ADMIN_BUTTON_FIND, ADMIN_BUTTON_RESET_REVIEW,
+    OWNER_BUTTON_CODES_PERIOD, OWNER_BUTTON_GUESTS_PERIOD,
+    "🎉 Акции", "📍 Клуб", "👥 Пригласить друга", "🧾 Прайс",
+    "✅ Я в клубе", "💎 Мой статус", WHEEL_BUTTON.text,
+}
+
+
+async def try_menu_escape(message: Message, state: FSMContext) -> bool:
+    """Если во время ожидания ввода (код/поиск/дата и т.п.) человек передумал
+    и нажал другую кнопку меню или отправил команду — не пытаемся скормить
+    это как ответ на предыдущий вопрос, а мягко выходим из состояния.
+    Возвращает True, если сообщение было "запросом на выход", а не данными.
+    """
+    text = (message.text or "").strip()
+    if not text:
+        return False
+    if text.startswith("/"):
+        await state.clear()
+        await message.answer("Хорошо, отменил ожидание — отправь команду ещё раз 🙂")
+        return True
+    if text in _ESCAPE_MENU_TEXTS:
+        await state.clear()
+        await message.answer("Окей, отменил предыдущее действие — нажми нужную кнопку ещё раз 🙂")
+        return True
+    return False
+
+
 @router.message(AdminFlow.waiting_code)
 async def admin_flow_code(message: Message, state: FSMContext) -> None:
+    if await try_menu_escape(message, state):
+        return
     await state.clear()
     await do_redeem(message, (message.text or "").strip())
 
@@ -1141,6 +1171,8 @@ async def admin_btn_find(message: Message, state: FSMContext) -> None:
 
 @router.message(AdminFlow.waiting_find)
 async def admin_flow_find(message: Message, state: FSMContext) -> None:
+    if await try_menu_escape(message, state):
+        return
     await state.clear()
     await do_find(message, (message.text or "").strip())
 
@@ -1155,6 +1187,8 @@ async def admin_btn_reset_review(message: Message, state: FSMContext) -> None:
 
 @router.message(AdminFlow.waiting_reset_review)
 async def admin_flow_reset_review(message: Message, state: FSMContext) -> None:
+    if await try_menu_escape(message, state):
+        return
     await state.clear()
     await do_reset_review(message, (message.text or "").strip())
 
@@ -1238,6 +1272,8 @@ async def cb_period_pick(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(PeriodExportState.waiting_range)
 async def period_export_custom_range(message: Message, state: FSMContext) -> None:
+    if await try_menu_escape(message, state):
+        return
     data = await state.get_data()
     kind = data.get("period_kind", "codes")
     await state.clear()
