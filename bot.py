@@ -161,6 +161,10 @@ REVIEW_POINTS_PHOTO = os.environ.get("REVIEW_POINTS_PHOTO", "25 000")
 LOTTERY_JACKPOT_POINTS = os.environ.get("LOTTERY_JACKPOT_POINTS", "50 000")
 LOTTERY_WIN_POINTS = os.environ.get("LOTTERY_WIN_POINTS", "20 000")
 WHEEL_MIN_TIER = os.environ.get("WHEEL_MIN_TIER", "silver")  # "silver" или "gold"
+# суммарный шанс какого-либо приза (обычного + джекпота), в процентах.
+# по умолчанию 70% гостей получают хоть что-то, 5% из них — джекпот.
+WHEEL_WIN_PERCENT = float(os.environ.get("WHEEL_WIN_PERCENT", "65"))
+WHEEL_JACKPOT_PERCENT = float(os.environ.get("WHEEL_JACKPOT_PERCENT", "5"))
 
 # что администратор должен начислить гостю при погашении кода
 # (checkin намеренно не включён - это просто счётчик визита, без начисления)
@@ -222,6 +226,11 @@ WINBACK_TEXT = os.environ.get(
     "Мы соскучились — держи бонус специально для постоянных гостей: "
     "+25% к следующему пополнению баланса.\n"
     "Покажи это сообщение администратору на стойке в течение 7 дней.",
+)
+WHEEL_NUDGE_TEXT = os.environ.get(
+    "WHEEL_NUDGE_TEXT",
+    "🎡 Сегодня у тебя есть бесплатный спин колеса фортуны!\n"
+    "Не забудь прокрутить — вдруг именно сегодня повезёт 🍀",
 )
 BACKUP_INTERVAL_DAYS = int(os.environ.get("BACKUP_INTERVAL_DAYS", "7"))
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "").strip()
@@ -584,6 +593,23 @@ def db_reset_review_claim(telegram_id: int) -> None:
     conn.close()
 
 
+def db_wheel_nudge_targets() -> list[int]:
+    """Гости с доступом к колесу (см. WHEEL_MIN_TIER), кто ещё не крутил сегодня."""
+    eligible_tiers = [t for t, r in TIER_RANK.items() if t and r >= WHEEL_MIN_TIER_RANK]
+    if not eligible_tiers:
+        return []
+    today = datetime.now(TASHKENT_TZ).date().isoformat()
+    placeholders = ",".join("?" for _ in eligible_tiers)
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        f"SELECT telegram_id FROM subscribers WHERE tier IN ({placeholders}) "
+        "AND (last_spin_date IS NULL OR last_spin_date != ?)",
+        (*eligible_tiers, today),
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
 def db_get_last_spin_date(telegram_id: int) -> str | None:
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute("SELECT last_spin_date FROM subscribers WHERE telegram_id = ?", (telegram_id,)).fetchone()
@@ -823,6 +849,10 @@ class WinbackNowState(StatesGroup):
     waiting_confirm = State()
 
 
+class WheelNudgeState(StatesGroup):
+    waiting_confirm = State()
+
+
 class AdminFlow(StatesGroup):
     waiting_code = State()
     waiting_find = State()
@@ -864,7 +894,7 @@ async def cmd_start(message: Message, command: CommandObject) -> None:
         await message.answer("Ты уже с нами! 🎮 Вот меню:", reply_markup=main_menu_kb(user_id))
         return
 
-    if is_admin(user_id):
+    if is_admin(user_id) and not is_owner(user_id):
         await message.answer(
             "Привет! Это рабочий доступ Colizeum Bot 🛠\nВводи коды гостей, ищи гостей, снимай блокировки отзывов.",
             reply_markup=main_menu_kb(user_id),
@@ -1746,6 +1776,49 @@ async def cmd_run_winback_confirm(message: Message, state: FSMContext) -> None:
     await message.answer(f"✅ Готово. Win-back отправлен: {sent} из {len(ids)}.")
 
 
+@router.message(Command("wheel_nudge"))
+async def cmd_wheel_nudge(message: Message, state: FSMContext) -> None:
+    # напоминание "у тебя есть спин сегодня" — только тем, кому колесо доступно
+    # (см. WHEEL_MIN_TIER) и кто ещё не крутил сегодня. Требует подтверждения.
+    if not is_owner(message.from_user.id):
+        return
+    ids = db_wheel_nudge_targets()
+    if not ids:
+        await message.answer("Сейчас некому слать — либо все уже крутили сегодня, либо нет гостей с доступом к колесу.")
+        return
+    await state.update_data(wheel_nudge_ids=ids)
+    await message.answer(
+        f"⚠️ Сейчас уйдёт напоминание о спине {len(ids)} гостям (Серебро/Золото, кто ещё не крутил сегодня).\n"
+        "Чтобы подтвердить, напиши ДА\n"
+        "Чтобы отменить — /cancel"
+    )
+    await state.set_state(WheelNudgeState.waiting_confirm)
+
+
+@router.message(WheelNudgeState.waiting_confirm, Command("cancel"))
+async def cmd_wheel_nudge_cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Отменено, никому ничего не ушло.")
+
+
+@router.message(WheelNudgeState.waiting_confirm, F.text.upper() == "ДА")
+async def cmd_wheel_nudge_confirm(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    ids = data.get("wheel_nudge_ids", [])
+    await state.clear()
+
+    sent = 0
+    for tg_id in ids:
+        try:
+            await bot.send_message(tg_id, WHEEL_NUDGE_TEXT)
+            sent += 1
+        except Exception:
+            logging.warning("не удалось отправить напоминание о колесе %s", tg_id)
+        await asyncio.sleep(0.1)
+
+    await message.answer(f"✅ Готово. Напоминание отправлено: {sent} из {len(ids)}.")
+
+
 @router.message(Command("export"))
 async def cmd_export(message: Message) -> None:
     if not is_admin(message.from_user.id):
@@ -2085,6 +2158,32 @@ WHEEL_SEGMENTS = [
     {"index": 7, "type": "jackpot"},
 ]
 
+
+def pick_wheel_segment() -> dict:
+    """Выбирает сектор колеса с учётом WHEEL_WIN_PERCENT/WHEEL_JACKPOT_PERCENT,
+    а не поровну между 8 секторами. Визуальная раскладка колеса не меняется —
+    просто "пустые" сектора в сумме получают меньший вес."""
+    lose = [s for s in WHEEL_SEGMENTS if s["type"] == "lose"]
+    win = [s for s in WHEEL_SEGMENTS if s["type"] == "win"]
+    jackpot = [s for s in WHEEL_SEGMENTS if s["type"] == "jackpot"]
+
+    jackpot_pct = max(0.0, min(100.0, WHEEL_JACKPOT_PERCENT))
+    win_pct = max(0.0, min(100.0 - jackpot_pct, WHEEL_WIN_PERCENT))
+    lose_pct = max(0.0, 100.0 - win_pct - jackpot_pct)
+
+    weights = []
+    for s in WHEEL_SEGMENTS:
+        if s["type"] == "lose" and lose:
+            weights.append(lose_pct / len(lose))
+        elif s["type"] == "win" and win:
+            weights.append(win_pct / len(win))
+        elif s["type"] == "jackpot" and jackpot:
+            weights.append(jackpot_pct / len(jackpot))
+        else:
+            weights.append(0.0)
+
+    return random.choices(WHEEL_SEGMENTS, weights=weights, k=1)[0]
+
 TIER_RANK = {"": 0, "silver": 1, "gold": 2}
 WHEEL_MIN_TIER_RANK = TIER_RANK.get(WHEEL_MIN_TIER, 1)
 
@@ -2149,7 +2248,7 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
         return web.json_response({"error": "already_spun"}, status=409)
 
     db_set_last_spin_date(user_id, today)
-    chosen = random.choice(WHEEL_SEGMENTS)
+    chosen = pick_wheel_segment()
     result = {"segment_index": chosen["index"], "prize_type": chosen["type"]}
 
     if chosen["type"] in ("win", "jackpot"):
