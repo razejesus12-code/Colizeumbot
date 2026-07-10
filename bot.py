@@ -232,6 +232,11 @@ WHEEL_NUDGE_TEXT = os.environ.get(
     "🎡 Сегодня у тебя есть бесплатный спин колеса фортуны!\n"
     "Не забудь прокрутить — вдруг именно сегодня повезёт 🍀",
 )
+WHEEL_TRIAL_TEXT = os.environ.get(
+    "WHEEL_TRIAL_TEXT",
+    "🎁 Специально для тебя открыли Колесо Фортуны — держи один бесплатный спин!\n"
+    "Кнопка появилась в меню, попробуй прямо сейчас 👇",
+)
 BACKUP_INTERVAL_DAYS = int(os.environ.get("BACKUP_INTERVAL_DAYS", "7"))
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "").strip()
 
@@ -264,7 +269,7 @@ def guest_menu_rows(user_id: int) -> list[list[KeyboardButton]]:
         [KeyboardButton(text="✅ Я в клубе"), KeyboardButton(text="💎 Мой статус")],
     ]
     tier = db_get_tier(user_id)
-    if TIER_RANK.get(tier, 0) >= WHEEL_MIN_TIER_RANK:
+    if TIER_RANK.get(tier, 0) >= WHEEL_MIN_TIER_RANK or db_has_trial_spin(user_id):
         rows.append([WHEEL_BUTTON])
     else:
         rows.append([WHEEL_BUTTON_LOCKED])
@@ -373,6 +378,7 @@ def db_init() -> None:
         ("last_spin_date", "TEXT"),
         ("last_checkin_at", "TEXT"),
         ("winback_sent", "INTEGER DEFAULT 0"),
+        ("trial_spin_available", "INTEGER DEFAULT 0"),
     ):
         try:
             conn.execute(f"ALTER TABLE subscribers ADD COLUMN {column} {coltype}")
@@ -627,6 +633,48 @@ def db_set_last_spin_date(telegram_id: int, date_str: str) -> None:
     conn.close()
 
 
+def db_trial_spin_targets() -> list[int]:
+    """Гости БЕЗ доступа к колесу (см. WHEEL_MIN_TIER), кому ещё не выдавали пробный спин."""
+    eligible_tiers = [t for t, r in TIER_RANK.items() if t and r >= WHEEL_MIN_TIER_RANK]
+    conn = sqlite3.connect(DB_PATH)
+    if eligible_tiers:
+        placeholders = ",".join("?" for _ in eligible_tiers)
+        rows = conn.execute(
+            f"SELECT telegram_id FROM subscribers "
+            f"WHERE tier NOT IN ({placeholders}) AND trial_spin_available = 0",
+            eligible_tiers,
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT telegram_id FROM subscribers WHERE trial_spin_available = 0"
+        ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def db_grant_trial_spin(telegram_id: int) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE subscribers SET trial_spin_available = 1 WHERE telegram_id = ?", (telegram_id,))
+    conn.commit()
+    conn.close()
+
+
+def db_has_trial_spin(telegram_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT trial_spin_available FROM subscribers WHERE telegram_id = ?", (telegram_id,)
+    ).fetchone()
+    conn.close()
+    return bool(row and row[0])
+
+
+def db_consume_trial_spin(telegram_id: int) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE subscribers SET trial_spin_available = 0 WHERE telegram_id = ?", (telegram_id,))
+    conn.commit()
+    conn.close()
+
+
 def db_list_by_tier(tier: str) -> list[dict]:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -853,6 +901,10 @@ class WinbackNowState(StatesGroup):
 
 
 class WheelNudgeState(StatesGroup):
+    waiting_confirm = State()
+
+
+class WheelTrialGrantState(StatesGroup):
     waiting_confirm = State()
 
 
@@ -1822,6 +1874,51 @@ async def cmd_wheel_nudge_confirm(message: Message, state: FSMContext) -> None:
     await message.answer(f"✅ Готово. Напоминание отправлено: {sent} из {len(ids)}.")
 
 
+@router.message(Command("wheel_trial_grant"))
+async def cmd_wheel_trial_grant(message: Message, state: FSMContext) -> None:
+    # даёт ОДИН пробный спин всем гостям без доступа к колесу (ниже WHEEL_MIN_TIER),
+    # у кого ещё нет неиспользованного пробного спина. После одного вращения
+    # (см. handle_wheel_spin) спин автоматически сгорает, и колесо снова закрывается.
+    if not is_owner(message.from_user.id):
+        return
+    ids = db_trial_spin_targets()
+    if not ids:
+        await message.answer("Сейчас некому выдавать — у всех либо уже есть доступ, либо уже есть пробный спин.")
+        return
+    await state.update_data(wheel_trial_ids=ids)
+    await message.answer(
+        f"⚠️ Сейчас {len(ids)} гостям без статуса откроется колесо на ОДИН спин, и придёт уведомление.\n"
+        "Чтобы подтвердить, напиши ДА\n"
+        "Чтобы отменить — /cancel"
+    )
+    await state.set_state(WheelTrialGrantState.waiting_confirm)
+
+
+@router.message(WheelTrialGrantState.waiting_confirm, Command("cancel"))
+async def cmd_wheel_trial_grant_cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Отменено, никому ничего не выдал.")
+
+
+@router.message(WheelTrialGrantState.waiting_confirm, F.text.upper() == "ДА")
+async def cmd_wheel_trial_grant_confirm(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    ids = data.get("wheel_trial_ids", [])
+    await state.clear()
+
+    sent = 0
+    for tg_id in ids:
+        db_grant_trial_spin(tg_id)
+        try:
+            await bot.send_message(tg_id, WHEEL_TRIAL_TEXT, reply_markup=main_menu_kb(tg_id))
+            sent += 1
+        except Exception:
+            logging.warning("не удалось уведомить о пробном спине %s", tg_id)
+        await asyncio.sleep(0.1)
+
+    await message.answer(f"✅ Готово. Пробный спин выдан и разослан: {sent} из {len(ids)}.")
+
+
 @router.message(Command("export"))
 async def cmd_export(message: Message) -> None:
     if not is_admin(message.from_user.id):
@@ -2194,12 +2291,14 @@ WHEEL_MIN_TIER_RANK = TIER_RANK.get(WHEEL_MIN_TIER, 1)
 def wheel_eligibility(user_id: int) -> dict:
     tier = db_get_tier(user_id)
     visits = db_get_visits(user_id)
-    eligible = TIER_RANK.get(tier, 0) >= WHEEL_MIN_TIER_RANK
+    by_tier = TIER_RANK.get(tier, 0) >= WHEEL_MIN_TIER_RANK
+    trial = (not by_tier) and db_has_trial_spin(user_id)
     return {
         "tier": tier,
         "visits": visits,
         "visits_needed": TIER_SILVER_VISITS if WHEEL_MIN_TIER_RANK <= 1 else TIER_GOLD_VISITS,
-        "eligible": eligible,
+        "eligible": by_tier or trial,
+        "via_trial": trial,
     }
 
 
@@ -2251,6 +2350,8 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
         return web.json_response({"error": "already_spun"}, status=409)
 
     db_set_last_spin_date(user_id, today)
+    if elig["via_trial"]:
+        db_consume_trial_spin(user_id)
     chosen = pick_wheel_segment()
     result = {"segment_index": chosen["index"], "prize_type": chosen["type"]}
 
@@ -2395,3 +2496,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
