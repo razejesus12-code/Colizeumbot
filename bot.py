@@ -2832,8 +2832,20 @@ async def handle_wheel_spin(request: web.Request) -> web.Response:
     if chosen["type"] in ("win", "jackpot"):
         bonus_type = "lottery_jackpot" if chosen["type"] == "jackpot" else "lottery_win"
         code = db_create_bonus(user_id, bonus_type)
-        result["amount"] = BONUS_AMOUNTS.get(bonus_type)
+        amount = BONUS_AMOUNTS.get(bonus_type)
+        result["amount"] = amount
         result["code"] = code
+        try:
+            prize_emoji = "🎉" if chosen["type"] == "jackpot" else "🎊"
+            await bot.send_message(
+                user_id,
+                f"{prize_emoji} Колесо Фортуны: выигрыш!\n"
+                f"Приз: {amount}\n\n"
+                f"🔑 Код: {code}\n\n"
+                "Покажи это сообщение администратору на стойке.",
+            )
+        except Exception:
+            logging.warning("не удалось отправить код выигрыша в чат %s", user_id)
 
     return web.json_response(result)
 
