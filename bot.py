@@ -1225,8 +1225,12 @@ async def handle_contact(message: Message) -> None:
         "📊 Как работают статусы в Colizeum\n\n"
         f"Каждый визит засчитывается, когда пополняешь баланс от {MIN_CHECKIN_AMOUNT} сум "
         "и показываешь код администратору (кнопка «✅ Я в клубе»).\n\n"
-        f"🥈 {TIER_SILVER_VISITS} визитов — статус выше, бонус на баланс и доступ к Колесу Фортуны\n"
-        f"🥇 {TIER_GOLD_VISITS} визитов — максимальный статус, бонус ещё больше\n\n"
+        f"🥈 {TIER_SILVER_VISITS} визитов — статус выше, бонус на баланс, доступ к Колесу Фортуны "
+        f"и скидка {TIER_SILVER_DISCOUNT_PERCENT}% в клубе (кроме бара и ночных пакетов)\n"
+        f"🥇 {TIER_GOLD_VISITS} визитов — максимальный статус, бонус ещё больше, "
+        f"скидка {TIER_GOLD_DISCOUNT_PERCENT}%\n\n"
+        f"Чтобы удержать статус и скидку — заходи от {TIER_SILVER_MAINTAIN_VISITS}/{TIER_GOLD_MAINTAIN_VISITS} "
+        "раз в месяц (Серебро/Золото).\n\n"
         "Назвать твои статусы можем в теме твоей любимой игры 🎮"
     )
     await message.answer("В какую игру играешь чаще всего?", reply_markup=game_choice_kb())
