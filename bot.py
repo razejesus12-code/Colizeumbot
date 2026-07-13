@@ -337,6 +337,7 @@ ADMIN_BUTTON_FIND = "🔍 Поиск гостя"
 ADMIN_BUTTON_RESET_REVIEW = "♻️ Снять блокировку отзыва"
 OWNER_BUTTON_CODES_PERIOD = "📅 Коды за период"
 OWNER_BUTTON_GUESTS_PERIOD = "📅 Новые гости за период"
+OWNER_BUTTON_MORE = "⚙️ Ещё"
 
 
 def guest_menu_rows(user_id: int) -> list[list[KeyboardButton]]:
@@ -363,6 +364,7 @@ def admin_menu_rows() -> list[list[KeyboardButton]]:
 def owner_menu_rows() -> list[list[KeyboardButton]]:
     return [
         [KeyboardButton(text=OWNER_BUTTON_CODES_PERIOD), KeyboardButton(text=OWNER_BUTTON_GUESTS_PERIOD)],
+        [KeyboardButton(text=OWNER_BUTTON_MORE)],
     ]
 
 
@@ -1489,7 +1491,7 @@ async def admin_btn_code(message: Message, state: FSMContext) -> None:
 
 _ESCAPE_MENU_TEXTS = {
     ADMIN_BUTTON_CODE, ADMIN_BUTTON_FIND, ADMIN_BUTTON_RESET_REVIEW,
-    OWNER_BUTTON_CODES_PERIOD, OWNER_BUTTON_GUESTS_PERIOD,
+    OWNER_BUTTON_CODES_PERIOD, OWNER_BUTTON_GUESTS_PERIOD, OWNER_BUTTON_MORE,
     "🎉 Акции", "📍 Клуб", "👥 Пригласить друга", "🧾 Прайс",
     "✅ Я в клубе", "💎 Мой статус", WHEEL_BUTTON.text, WHEEL_BUTTON_LOCKED.text,
 }
@@ -2246,6 +2248,47 @@ async def cmd_wheel_trial_grant_confirm(message: Message, state: FSMContext) -> 
         await asyncio.sleep(0.1)
 
     await message.answer(f"✅ Готово. Пробный спин выдан и разослан: {sent} из {len(ids)}.")
+
+
+def owner_more_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👀 Win-back: превью", callback_data="ownermenu:winback_preview")],
+            [InlineKeyboardButton(text="📢 Win-back: разослать всем", callback_data="ownermenu:winback_run")],
+            [InlineKeyboardButton(text="🎡 Напомнить про спин", callback_data="ownermenu:wheel_nudge")],
+            [InlineKeyboardButton(text="🎁 Пробный спин всем без статуса", callback_data="ownermenu:wheel_trial")],
+        ]
+    )
+
+
+@router.message(F.text == OWNER_BUTTON_MORE)
+async def owner_btn_more(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    await message.answer("Что сделать?", reply_markup=owner_more_menu_kb())
+
+
+@router.callback_query(F.data.startswith("ownermenu:"))
+async def cb_owner_more(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Недоступно", show_alert=True)
+        return
+
+    action = callback.data.split(":", 1)[1]
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    if action == "winback_preview":
+        await cmd_winback_preview(callback.message)
+    elif action == "winback_run":
+        await cmd_run_winback_now(callback.message, state)
+    elif action == "wheel_nudge":
+        await cmd_wheel_nudge(callback.message, state)
+    elif action == "wheel_trial":
+        await cmd_wheel_trial_grant(callback.message, state)
 
 
 @router.message(Command("export"))
