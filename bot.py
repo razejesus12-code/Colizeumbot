@@ -49,16 +49,20 @@ OWNER_ID = int(os.environ.get("OWNER_ID", "0") or "0")
 
 BONUS_AMOUNT_WELCOME = os.environ.get("BONUS_AMOUNT_WELCOME", "35 000")
 BONUS_AMOUNT_REFERRER = os.environ.get("BONUS_AMOUNT_REFERRER", "50 000")
+# минимальная сумма пополнения, при которой welcome-бонус реально засчитывается —
+# защита от фейковых Telegram-аккаунтов, фармящих бонус без реального визита
+MIN_WELCOME_AMOUNT = int(os.environ.get("MIN_WELCOME_AMOUNT", "30000"))
 
 BONUS_TEXT = os.environ.get(
     "BONUS_TEXT",
     "Спасибо за подписку! 🎁\n\n"
     f"Твой бонус: {BONUS_AMOUNT_WELCOME} сум на баланс (это час в Bootcamp 😉).\n"
-    "Покажи это сообщение администратору на стойке в течение 7 дней.",
+    f"Начислим при пополнении баланса от {MIN_WELCOME_AMOUNT} сум — "
+    "покажи это сообщение администратору на стойке в течение 7 дней.",
 )
 REFERRER_BONUS_TEXT = os.environ.get(
     "REFERRER_BONUS_TEXT",
-    "Твой друг присоединился по твоей ссылке! 🙌\n"
+    "Твой друг пришёл по твоей ссылке и уже был в клубе! 🙌\n"
     f"Бонус тебе: {BONUS_AMOUNT_REFERRER} сум на баланс.\n"
     "Покажи это сообщение администратору на стойке.",
 )
@@ -479,6 +483,7 @@ def db_init() -> None:
         ("last_checkin_at", "TEXT"),
         ("winback_sent", "INTEGER DEFAULT 0"),
         ("trial_spin_available", "INTEGER DEFAULT 0"),
+        ("referrer_bonus_paid", "INTEGER DEFAULT 0"),
         ("favorite_game", "TEXT DEFAULT ''"),
         ("tier_since", "TEXT"),
     ):
@@ -1207,13 +1212,6 @@ async def handle_contact(message: Message) -> None:
     code = db_create_bonus(user_id, bonus_type)
     bonus_text = f"{bonus_text}\n\n🔑 Код бонуса: {code}"
 
-    if referrer_id:
-        try:
-            referrer_code = db_create_bonus(referrer_id, "referrer")
-            await bot.send_message(referrer_id, f"{REFERRER_BONUS_TEXT}\n\n🔑 Код бонуса: {referrer_code}")
-        except Exception:
-            logging.warning("не удалось уведомить пригласившего %s", referrer_id)
-
     await message.answer(bonus_text)
 
     await message.answer(
@@ -1363,13 +1361,23 @@ async def menu_invite(message: Message) -> None:
     if not db_is_subscriber(user_id):
         await message.answer("Сначала подпишись через /start, потом сможешь приглашать друзей 🙂")
         return
+
+    visits = db_get_visits(user_id)
+    if visits < 1:
+        await message.answer(
+            "Приглашать друзей можно после первого визита в клуб 🙂\n"
+            "Покажи код из «✅ Я в клубе» администратору — и ссылка откроется."
+        )
+        return
+
     link = get_referral_link(user_id)
     count = db_referral_count(user_id)
     await message.answer(
         "Приглашай друзей и получай бонус за каждого! 🙌\n\n"
         f"Твоя ссылка:\n{link}\n\n"
         f"Приглашено друзей: {count}\n\n"
-        "Когда друг перейдёт по ссылке и поделится номером — вы оба получите бонус."
+        "Когда друг перейдёт по ссылке и зарегистрируется — он получит свой бонус.\n"
+        "Твой бонус придёт, когда друг придёт в клуб первый раз и подтвердит визит."
     )
 
 
@@ -1667,6 +1675,37 @@ async def cmd_stats(message: Message) -> None:
     )
 
 
+async def pay_referrer_bonus_if_due(guest_id: int) -> None:
+    """Начисляет бонус пригласившему — но только на ПЕРВЫЙ реальный визит приглашённого
+    друга (не на регистрацию), и только один раз. Так рефералку нельзя фармить
+    фейковыми аккаунтами, которые просто регистрируются и никогда не приходят."""
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT referred_by, referrer_bonus_paid FROM subscribers WHERE telegram_id = ?", (guest_id,)
+    ).fetchone()
+    conn.close()
+
+    if not row or not row[0] or row[1]:
+        return  # нет пригласившего, либо уже выплачено раньше
+
+    referrer_id = row[0]
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE subscribers SET referrer_bonus_paid = 1 WHERE telegram_id = ?", (guest_id,)
+    )
+    conn.commit()
+    conn.close()
+
+    try:
+        referrer_code = db_create_bonus(referrer_id, "referrer")
+        await bot.send_message(
+            referrer_id,
+            f"{REFERRER_BONUS_TEXT}\n\n🔑 Код бонуса: {referrer_code}",
+        )
+    except Exception:
+        logging.warning("не удалось уведомить пригласившего %s", referrer_id)
+
+
 async def apply_confirmed_checkin(guest_id: int) -> str:
     """Засчитывает визит гостю (визиты/статус/уведомления).
 
@@ -1679,6 +1718,7 @@ async def apply_confirmed_checkin(guest_id: int) -> str:
     db_set_last_checkin(guest_id)
     if visits == 1:
         db_set_first_checkin(guest_id)
+        await pay_referrer_bonus_if_due(guest_id)
     current_tier = db_get_tier(guest_id)
     new_tier = None
     if visits >= TIER_GOLD_VISITS and current_tier != "gold":
@@ -1750,9 +1790,11 @@ async def do_redeem(message: Message, code: str) -> None:
         await message.answer(f"⚠️ Этот код уже был погашен {used_at}.\nТип бонуса: {label}{amount_line}")
         return
 
-    if row["bonus_type"] == "checkin":
+    if row["bonus_type"] in ("checkin", "welcome"):
         guest = db_get_subscriber_by_id(row["telegram_id"])
         guest_name = guest["full_name"] if guest else "без имени"
+        min_amount = MIN_CHECKIN_AMOUNT if row["bonus_type"] == "checkin" else MIN_WELCOME_AMOUNT
+        purpose = "визит" if row["bonus_type"] == "checkin" else "бонус за подписку"
 
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -1765,7 +1807,7 @@ async def do_redeem(message: Message, code: str) -> None:
         await message.answer(
             f"👤 Гость: {guest_name}\n"
             f"🆔 {row['telegram_id']}\n\n"
-            f"Пополнил от {MIN_CHECKIN_AMOUNT} сум? Подтверди визит:",
+            f"Пополнил от {min_amount} сум? Подтверди {purpose}:",
             reply_markup=kb,
         )
         return
@@ -1820,8 +1862,12 @@ async def cb_checkin_confirm(callback: CallbackQuery) -> None:
     guest = db_get_subscriber_by_id(guest_id)
     guest_name = guest["full_name"] if guest else "без имени"
 
-    extra = await apply_confirmed_checkin(guest_id)
-    text = f"✅ Визит подтверждён\n👤 {guest_name}\n🆔 {guest_id}{extra}"
+    if row["bonus_type"] == "checkin":
+        extra = await apply_confirmed_checkin(guest_id)
+        text = f"✅ Визит подтверждён\n👤 {guest_name}\n🆔 {guest_id}{extra}"
+    else:
+        amount = BONUS_AMOUNTS.get(row["bonus_type"], "")
+        text = f"✅ Бонус подтверждён\n👤 {guest_name}\n🆔 {guest_id}\n💰 Начислить: {amount}"
 
     await callback.message.edit_text(text)
     await callback.answer("Готово")
