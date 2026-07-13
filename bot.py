@@ -154,7 +154,7 @@ PACKAGES_DIR = os.path.join(BASE_DIR, "packages")
 HOOKAH_DIR = os.path.join(BASE_DIR, "hookah")
 
 # буквы/цифры без похожих друг на друга символов (0/O, 1/I/L), чтобы код было легко читать вслух
-CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+CODE_ALPHABET = "0123456789"
 
 BONUS_LABELS = {
     "welcome": "Бонус за подписку",
@@ -1481,7 +1481,7 @@ async def admin_btn_code(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         return
     await state.set_state(AdminFlow.waiting_code)
-    await message.answer("Пришли код гостя (например AB12CD):")
+    await message.answer("Пришли код гостя (например 482917):")
 
 
 _ESCAPE_MENU_TEXTS = {
@@ -1738,7 +1738,7 @@ async def apply_confirmed_checkin(guest_id: int) -> str:
 async def do_redeem(message: Message, code: str) -> None:
     code = code.strip().upper()
     if not code:
-        await message.answer("Пришли код гостя (например AB12CD).")
+        await message.answer("Пришли код гостя (например 482917).")
         return
 
     row = db_peek_bonus(code)
