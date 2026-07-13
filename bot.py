@@ -47,28 +47,24 @@ ADMIN_IDS = {
 # Отдельный владелец — для команд, которые не должны быть доступны даже другим админам
 OWNER_ID = int(os.environ.get("OWNER_ID", "0") or "0")
 
+BONUS_AMOUNT_WELCOME = os.environ.get("BONUS_AMOUNT_WELCOME", "35 000")
+BONUS_AMOUNT_REFERRER = os.environ.get("BONUS_AMOUNT_REFERRER", "50 000")
+
 BONUS_TEXT = os.environ.get(
     "BONUS_TEXT",
     "Спасибо за подписку! 🎁\n\n"
-    "Твой бонус: +20% к следующему пополнению баланса.\n"
+    f"Твой бонус: {BONUS_AMOUNT_WELCOME} сум на баланс (это час в Bootcamp 😉).\n"
     "Покажи это сообщение администратору на стойке в течение 7 дней.",
-)
-DAYTIME_BONUS_TEXT = os.environ.get(
-    "DAYTIME_BONUS_TEXT",
-    "Спасибо за подписку! ☀️🎁\n\n"
-    "Сейчас будний день — держи усиленный бонус: +30% к следующему пополнению баланса,\n"
-    "если придёшь сегодня с 10:00 до 17:00.\n"
-    "Покажи это сообщение администратору на стойке.",
 )
 REFERRER_BONUS_TEXT = os.environ.get(
     "REFERRER_BONUS_TEXT",
     "Твой друг присоединился по твоей ссылке! 🙌\n"
-    "Бонус тебе: +30% к следующему пополнению баланса.\n"
+    f"Бонус тебе: {BONUS_AMOUNT_REFERRER} сум на баланс.\n"
     "Покажи это сообщение администратору на стойке.",
 )
 REFERRED_EXTRA_TEXT = os.environ.get(
     "REFERRED_EXTRA_TEXT",
-    "\n\n🙌 Ты пришёл по приглашению друга — держи ещё +10% сверху к бонусу выше!",
+    "\n\n🙌 Ты пришёл по приглашению друга — этот бонус уже включён в сумму выше!",
 )
 REMINDER_TEXT = os.environ.get(
     "REMINDER_TEXT",
@@ -133,6 +129,25 @@ def last_full_week_sat_fri() -> tuple[date, date]:
     prev_friday = prev_saturday + timedelta(days=6)
     return prev_saturday, prev_friday
 
+
+def tashkent_month_range_to_naive_utc(year: int, month: int) -> tuple[str, str]:
+    """Границы календарного месяца (по Ташкенту), переведённые в наивный UTC —
+    в том же формате, в котором пишутся метки времени в базе."""
+    start_local_date = date(year, month, 1)
+    end_local_date = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+    start_local = datetime.combine(start_local_date, datetime.min.time(), tzinfo=TASHKENT_TZ)
+    end_local = datetime.combine(end_local_date, datetime.min.time(), tzinfo=TASHKENT_TZ)
+    start_utc = start_local.astimezone(UTC_TZ).replace(tzinfo=None)
+    end_utc = end_local.astimezone(UTC_TZ).replace(tzinfo=None)
+    return start_utc.isoformat(), end_utc.isoformat()
+
+
+def previous_month_ym(today: date) -> tuple[int, int]:
+    """(год, месяц) для месяца, который только что завершился."""
+    if today.month == 1:
+        return today.year - 1, 12
+    return today.year, today.month - 1
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMOS_DIR = os.path.join(BASE_DIR, "promos")
 PACKAGES_DIR = os.path.join(BASE_DIR, "packages")
@@ -149,6 +164,8 @@ BONUS_LABELS = {
     "checkin": "Отметка визита",
     "tier_silver": "Бонус за статус Серебряный",
     "tier_gold": "Бонус за статус Золотой",
+    "tier_silver_monthly": "Ежемесячный бонус Серебро (план визитов выполнен)",
+    "tier_gold_monthly": "Ежемесячный бонус Золото (план визитов выполнен)",
     "review_no_photo": "Отзыв без фото",
     "review_photo": "Отзыв с фото",
     "lottery_jackpot": "Джекпот в лототроне 🎰",
@@ -166,15 +183,27 @@ WHEEL_MIN_TIER = os.environ.get("WHEEL_MIN_TIER", "silver")  # "silver" или "
 WHEEL_WIN_PERCENT = float(os.environ.get("WHEEL_WIN_PERCENT", "65"))
 WHEEL_JACKPOT_PERCENT = float(os.environ.get("WHEEL_JACKPOT_PERCENT", "5"))
 
+# --- Удержание статуса: чтобы не потерять Серебро/Золото, нужно столько
+# визитов в КАЖДОМ календарном месяце (проверяется автоматически 1-го числа) ---
+TIER_SILVER_MAINTAIN_VISITS = int(os.environ.get("TIER_SILVER_MAINTAIN_VISITS", "8"))
+TIER_GOLD_MAINTAIN_VISITS = int(os.environ.get("TIER_GOLD_MAINTAIN_VISITS", "15"))
+# ежемесячный бонус-код при выполнении плана визитов
+TIER_SILVER_MONTHLY_BONUS = os.environ.get("TIER_SILVER_MONTHLY_BONUS", "25 000")
+TIER_GOLD_MONTHLY_BONUS = os.environ.get("TIER_GOLD_MONTHLY_BONUS", "50 000")
+# постоянная скидка в CRM (клуб выставляет вручную — бот только напоминает)
+TIER_SILVER_DISCOUNT_PERCENT = os.environ.get("TIER_SILVER_DISCOUNT_PERCENT", "5")
+TIER_GOLD_DISCOUNT_PERCENT = os.environ.get("TIER_GOLD_DISCOUNT_PERCENT", "10")
+
 # что администратор должен начислить гостю при погашении кода
 # (checkin намеренно не включён - это просто счётчик визита, без начисления)
 BONUS_AMOUNTS = {
-    "welcome": f"+{os.environ.get('BONUS_PERCENT_WELCOME', '20')}% к пополнению",
-    "daytime": f"+{os.environ.get('BONUS_PERCENT_DAYTIME', '30')}% к пополнению",
-    "referrer": f"+{os.environ.get('BONUS_PERCENT_REFERRER', '30')}% к пополнению",
+    "welcome": f"{BONUS_AMOUNT_WELCOME} сум на баланс",
+    "referrer": f"{BONUS_AMOUNT_REFERRER} сум на баланс",
     "reminder": f"+{os.environ.get('BONUS_PERCENT_REMINDER', '20')}% к пополнению",
-    "tier_silver": f"+{os.environ.get('BONUS_PERCENT_TIER_SILVER', '15')}% к пополнению",
-    "tier_gold": f"+{os.environ.get('BONUS_PERCENT_TIER_GOLD', '25')}% к пополнению",
+    "tier_silver": f"включить скидку {TIER_SILVER_DISCOUNT_PERCENT}% в CRM (не баланс)",
+    "tier_gold": f"включить скидку {TIER_GOLD_DISCOUNT_PERCENT}% в CRM (не баланс)",
+    "tier_silver_monthly": f"{TIER_SILVER_MONTHLY_BONUS} сум на баланс",
+    "tier_gold_monthly": f"{TIER_GOLD_MONTHLY_BONUS} сум на баланс",
     "winback": f"+{os.environ.get('BONUS_PERCENT_WINBACK', '25')}% к пополнению",
     "review_no_photo": f"{REVIEW_POINTS_NO_PHOTO} баллов на баланс",
     "review_photo": f"{REVIEW_POINTS_PHOTO} баллов на баланс",
@@ -187,18 +216,66 @@ TIER_SILVER_VISITS = int(os.environ.get("TIER_SILVER_VISITS", "10"))
 # защита от абуза "зашёл на 5 минут, пополнил по минимуму, вышел"
 MIN_CHECKIN_AMOUNT = int(os.environ.get("MIN_CHECKIN_AMOUNT", "50000"))
 TIER_GOLD_VISITS = int(os.environ.get("TIER_GOLD_VISITS", "25"))
+
 TIER_SILVER_TEXT = os.environ.get(
     "TIER_SILVER_TEXT",
-    "🥈 Поздравляем, ты получил статус Серебряный гость!\n"
-    "Бонус: +15% к следующему пополнению баланса.",
+    "🥈 Поздравляем, ты получил статус Серебряный гость!\n\n"
+    f"Тебе доступна скидка {TIER_SILVER_DISCOUNT_PERCENT}% в клубе (кроме бара и ночных пакетов) — "
+    "спроси на стойке, чтобы её включили.\n\n"
+    f"Чтобы удержать статус и скидку, приходи от {TIER_SILVER_MAINTAIN_VISITS} раз в месяц — "
+    f"тогда каждый месяц будешь получать ещё и бонус {TIER_SILVER_MONTHLY_BONUS} сум на баланс.",
 )
 TIER_GOLD_TEXT = os.environ.get(
     "TIER_GOLD_TEXT",
-    "🥇 Поздравляем, ты получил статус Золотой гость!\n"
-    "Бонус: +25% к следующему пополнению баланса.\n"
-    "Плюс приоритет на бронирование любимого места.",
+    "🥇 Поздравляем, ты получил статус Золотой гость!\n\n"
+    f"Тебе доступна скидка {TIER_GOLD_DISCOUNT_PERCENT}% в клубе (кроме бара и ночных пакетов) — "
+    "спроси на стойке, чтобы её включили.\n"
+    "Плюс приоритет на бронирование любимого места.\n\n"
+    f"Чтобы удержать статус и скидку, приходи от {TIER_GOLD_MAINTAIN_VISITS} раз в месяц — "
+    f"тогда каждый месяц будешь получать ещё и бонус {TIER_GOLD_MONTHLY_BONUS} сум на баланс.",
 )
 TIER_LABELS = {"": "Без статуса", "silver": "🥈 Серебряный", "gold": "🥇 Золотой"}
+
+GAME_NAMES = {
+    "valorant": "Valorant",
+    "cs2": "CS2",
+    "dota": "Dota 2",
+    "pubg": "PUBG",
+}
+
+# Тема статусов под игру. Уровни те же (silver/gold), просто другие названия —
+# логика статусов (визиты, бонусы) не меняется, меняется только как это называется.
+GAME_TIER_LABELS = {
+    "valorant": {"silver": "💠 Platinum", "gold": "🔴 Immortal"},
+    "cs2": {"silver": "🦅 Legendary Eagle", "gold": "🌍 Global Elite"},
+    "dota": {"silver": "🌌 Ancient", "gold": "♾️ Immortal"},
+    "pubg": {"silver": "💎 Diamond", "gold": "👑 Conqueror"},
+}
+
+
+def db_get_favorite_game(telegram_id: int) -> str:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT favorite_game FROM subscribers WHERE telegram_id = ?", (telegram_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else ""
+
+
+def db_set_favorite_game(telegram_id: int, game: str) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE subscribers SET favorite_game = ? WHERE telegram_id = ?", (game, telegram_id))
+    conn.commit()
+    conn.close()
+
+
+def tier_label_for_user(user_id: int, tier: str) -> str:
+    if not tier:
+        return TIER_LABELS[""]
+    game = db_get_favorite_game(user_id)
+    if game in GAME_TIER_LABELS:
+        return GAME_TIER_LABELS[game][tier]
+    return TIER_LABELS.get(tier, tier)
 
 FEEDBACK_DELAY_HOURS = int(os.environ.get("FEEDBACK_DELAY_HOURS", "2"))
 FEEDBACK_PROMPT_TEXT = os.environ.get(
@@ -361,6 +438,16 @@ def db_init() -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS visits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER,
+            visited_at TEXT
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_visits_telegram_id ON visits(telegram_id)")
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS bot_settings (
             key TEXT PRIMARY KEY,
             value TEXT
@@ -379,6 +466,8 @@ def db_init() -> None:
         ("last_checkin_at", "TEXT"),
         ("winback_sent", "INTEGER DEFAULT 0"),
         ("trial_spin_available", "INTEGER DEFAULT 0"),
+        ("favorite_game", "TEXT DEFAULT ''"),
+        ("tier_since", "TEXT"),
     ):
         try:
             conn.execute(f"ALTER TABLE subscribers ADD COLUMN {column} {coltype}")
@@ -543,9 +632,47 @@ def db_increment_visits(telegram_id: int) -> int:
     return new_count
 
 
+def db_log_visit(telegram_id: int) -> None:
+    """Пишет визит с датой — нужно для проверки 'N визитов в месяц' на удержание статуса."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO visits (telegram_id, visited_at) VALUES (?, ?)",
+        (telegram_id, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_count_visits_in_range(telegram_id: int, start_iso: str, end_iso: str) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM visits WHERE telegram_id = ? AND visited_at >= ? AND visited_at < ?",
+        (telegram_id, start_iso, end_iso),
+    ).fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+
+def db_list_tiered_subscribers() -> list[dict]:
+    """Все гости с активным статусом (Серебро/Золото) и датой его получения."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT telegram_id, tier, tier_since FROM subscribers WHERE tier IN ('silver', 'gold')"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def db_set_tier(telegram_id: int, tier: str) -> None:
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("UPDATE subscribers SET tier = ? WHERE telegram_id = ?", (tier, telegram_id))
+    if tier in ("silver", "gold"):
+        conn.execute(
+            "UPDATE subscribers SET tier = ?, tier_since = ? WHERE telegram_id = ?",
+            (tier, datetime.now().isoformat(), telegram_id),
+        )
+    else:
+        conn.execute("UPDATE subscribers SET tier = ? WHERE telegram_id = ?", (tier, telegram_id))
     conn.commit()
     conn.close()
 
@@ -920,11 +1047,6 @@ class PeriodExportState(StatesGroup):
 
 # ---------- ВСПОМОГАТЕЛЬНОЕ ----------
 def get_bonus_text_and_type() -> tuple[str, str]:
-    now = datetime.now(TASHKENT_TZ)
-    is_weekday = now.weekday() < 5
-    is_daytime = 10 <= now.hour < 17
-    if is_weekday and is_daytime:
-        return DAYTIME_BONUS_TEXT, "daytime"
     return BONUS_TEXT, "welcome"
 
 
@@ -1000,7 +1122,44 @@ async def handle_contact(message: Message) -> None:
         except Exception:
             logging.warning("не удалось уведомить пригласившего %s", referrer_id)
 
-    await message.answer(bonus_text, reply_markup=main_menu_kb(user_id))
+    await message.answer(bonus_text)
+
+    await message.answer(
+        "📊 Как работают статусы в Colizeum\n\n"
+        f"Каждый визит засчитывается, когда пополняешь баланс от {MIN_CHECKIN_AMOUNT} сум "
+        "и показываешь код администратору (кнопка «✅ Я в клубе»).\n\n"
+        f"🥈 {TIER_SILVER_VISITS} визитов — статус выше, бонус на баланс и доступ к Колесу Фортуны\n"
+        f"🥇 {TIER_GOLD_VISITS} визитов — максимальный статус, бонус ещё больше\n\n"
+        "Назвать твои статусы можем в теме твоей любимой игры 🎮"
+    )
+    await message.answer("В какую игру играешь чаще всего?", reply_markup=game_choice_kb())
+
+
+def game_choice_kb() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=name, callback_data=f"game:{key}")]
+        for key, name in GAME_NAMES.items()
+    ]
+    rows.append([InlineKeyboardButton(text="Пропустить", callback_data="game:none")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("game:"))
+async def cb_choose_game(callback: CallbackQuery) -> None:
+    user_id = callback.from_user.id
+    game = callback.data.split(":", 1)[1]
+    if game == "none":
+        db_set_favorite_game(user_id, "")
+        await callback.message.edit_text("Хорошо, оставим стандартные названия статусов 🙂")
+    else:
+        db_set_favorite_game(user_id, game)
+        preview_silver = GAME_TIER_LABELS[game]["silver"]
+        preview_gold = GAME_TIER_LABELS[game]["gold"]
+        await callback.message.edit_text(
+            f"Готово! Теперь твои статусы: {preview_silver} → {preview_gold} 🎮"
+        )
+    await callback.answer()
+    await bot.send_message(user_id, "Вот твоё меню 👇", reply_markup=main_menu_kb(user_id))
 
 
 @router.message(Command("stop"))
@@ -1142,21 +1301,34 @@ async def menu_status(message: Message) -> None:
 
     visits = db_get_visits(user_id)
     tier = db_get_tier(user_id)
-    tier_label = TIER_LABELS.get(tier, tier)
+    tier_label = tier_label_for_user(user_id, tier)
 
     if tier == "gold":
         progress = "Ты уже на максимальном статусе — так держать! 🏆"
     elif tier == "silver":
         left = max(TIER_GOLD_VISITS - visits, 0)
-        progress = f"До статуса 🥇 Золотой осталось визитов: {left}"
+        progress = f"До статуса {tier_label_for_user(user_id, 'gold')} осталось визитов: {left}"
     else:
         left = max(TIER_SILVER_VISITS - visits, 0)
-        progress = f"До статуса 🥈 Серебряный осталось визитов: {left}"
+        progress = f"До статуса {tier_label_for_user(user_id, 'silver')} осталось визитов: {left}"
+
+    retention_line = ""
+    if tier in ("silver", "gold"):
+        today = datetime.now(TASHKENT_TZ).date()
+        month_start_iso, _ = tashkent_month_range_to_naive_utc(today.year, today.month)
+        now_iso = datetime.now().isoformat()
+        visits_this_month = db_count_visits_in_range(user_id, month_start_iso, now_iso)
+        required = TIER_GOLD_MAINTAIN_VISITS if tier == "gold" else TIER_SILVER_MAINTAIN_VISITS
+        discount = TIER_GOLD_DISCOUNT_PERCENT if tier == "gold" else TIER_SILVER_DISCOUNT_PERCENT
+        retention_line = (
+            f"\n\n📅 Визитов в этом месяце: {visits_this_month} из {required} — "
+            f"нужно, чтобы удержать статус и скидку {discount}%."
+        )
 
     await message.answer(
         f"💎 Твой статус: {tier_label}\n"
         f"Подтверждённых визитов: {visits}\n\n"
-        f"{progress}\n\n"
+        f"{progress}{retention_line}\n\n"
         "Визит засчитывается, когда администратор гасит твой код из кнопки «✅ Я в клубе»."
     )
 
@@ -1406,6 +1578,7 @@ async def apply_confirmed_checkin(guest_id: int) -> str:
     Возвращает текст-дополнение для итогового сообщения администратору.
     """
     visits = db_increment_visits(guest_id)
+    db_log_visit(guest_id)
     db_set_last_checkin(guest_id)
     if visits == 1:
         db_set_first_checkin(guest_id)
@@ -1421,6 +1594,9 @@ async def apply_confirmed_checkin(guest_id: int) -> str:
     if new_tier:
         db_set_tier(guest_id, new_tier)
         tier_text = TIER_GOLD_TEXT if new_tier == "gold" else TIER_SILVER_TEXT
+        themed_label = tier_label_for_user(guest_id, new_tier)
+        if db_get_favorite_game(guest_id):
+            tier_text = f"Новый ранг: {themed_label} 🎮\n\n{tier_text}"
         tier_code = db_create_bonus(guest_id, f"tier_{new_tier}")
         try:
             await bot.send_message(
@@ -1432,25 +1608,27 @@ async def apply_confirmed_checkin(guest_id: int) -> str:
             logging.warning("не удалось уведомить гостя %s о новом статусе", guest_id)
         extra += f"\n🎉 Гость получил новый статус: {TIER_LABELS.get(new_tier, new_tier)}!"
 
-        if new_tier == "gold":
-            conn = sqlite3.connect(DB_PATH)
-            phone_row = conn.execute(
-                "SELECT phone, full_name FROM subscribers WHERE telegram_id = ?", (guest_id,)
-            ).fetchone()
-            conn.close()
-            phone = phone_row[0] if phone_row else "неизвестен"
-            name = phone_row[1] if phone_row else ""
-            for admin_id in ADMIN_IDS:
-                try:
-                    await bot.send_message(
-                        admin_id,
-                        "🥇 Новый Золотой гость!\n\n"
-                        f"Имя: {name}\nТелефон: {phone}\n\n"
-                        "Не забудьте вручную проставить постоянную скидку 10% в CRM клуба "
-                        "(бот не имеет доступа к CRM и не может сделать это сам).",
-                    )
-                except Exception:
-                    logging.warning("не удалось уведомить админа %s", admin_id)
+        conn = sqlite3.connect(DB_PATH)
+        phone_row = conn.execute(
+            "SELECT phone, full_name FROM subscribers WHERE telegram_id = ?", (guest_id,)
+        ).fetchone()
+        conn.close()
+        phone = phone_row[0] if phone_row else "неизвестен"
+        name = phone_row[1] if phone_row else ""
+        discount_pct = TIER_GOLD_DISCOUNT_PERCENT if new_tier == "gold" else TIER_SILVER_DISCOUNT_PERCENT
+        tier_word = "Золотой" if new_tier == "gold" else "Серебряный"
+        emoji = "🥇" if new_tier == "gold" else "🥈"
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"{emoji} Новый {tier_word} гость!\n\n"
+                    f"Имя: {name}\nТелефон: {phone}\n\n"
+                    f"Не забудьте вручную проставить постоянную скидку {discount_pct}% в CRM клуба "
+                    "(бот не имеет доступа к CRM и не может сделать это сам).",
+                )
+            except Exception:
+                logging.warning("не удалось уведомить админа %s", admin_id)
 
     return extra
 
@@ -1675,18 +1853,26 @@ async def cmd_setstatus(message: Message, command: CommandObject) -> None:
 
     db_set_tier(target["telegram_id"], new_tier)
     name = target["full_name"] or "без имени"
+    crm_note = ""
+    if new_tier == "gold":
+        crm_note = f"\n\n⚠️ Не забудь включить скидку {TIER_GOLD_DISCOUNT_PERCENT}% в CRM."
+    elif new_tier == "silver":
+        crm_note = f"\n\n⚠️ Не забудь включить скидку {TIER_SILVER_DISCOUNT_PERCENT}% в CRM."
+    elif old_tier in ("silver", "gold") and not new_tier:
+        crm_note = "\n\n⚠️ Не забудь снять скидку в CRM."
     await message.answer(
         f"✅ Статус изменён вручную\n"
         f"👤 {name}\n"
         f"🆔 {target['telegram_id']}\n"
         f"📞 {target['phone']}\n"
-        f"{old_label} → {new_label}"
+        f"{old_label} → {new_label}{crm_note}"
     )
 
     try:
+        guest_facing_label = tier_label_for_user(target["telegram_id"], new_tier) if new_tier else new_label
         await bot.send_message(
             target["telegram_id"],
-            f"Твой статус в Colizeum обновлён: {new_label} 🎮",
+            f"Твой статус в Colizeum обновлён: {guest_facing_label} 🎮",
             reply_markup=main_menu_kb(target["telegram_id"]),
         )
     except Exception:
@@ -2394,6 +2580,103 @@ async def winback_loop() -> None:
         await asyncio.sleep(3600 * 6)  # проверяем раз в 6 часов
 
 
+async def retention_loop() -> None:
+    """1-го числа каждого месяца проверяет, выполнили ли Серебро/Золото план
+    визитов за только что закончившийся месяц, и продлевает или понижает статус."""
+    while True:
+        try:
+            await run_monthly_retention_check()
+        except Exception:
+            logging.exception("ошибка в retention_loop")
+        await asyncio.sleep(3600 * 12)  # смотрим дважды в сутки, само действие — раз в месяц
+
+
+async def run_monthly_retention_check() -> None:
+    today = datetime.now(TASHKENT_TZ).date()
+    if today.day != 1:
+        return  # действие только 1-го числа
+
+    ym_key = today.strftime("%Y-%m")
+    if db_get_setting("last_retention_run") == ym_key:
+        return  # уже отработали в этом месяце
+
+    py, pm = previous_month_ym(today)
+    start_iso, end_iso = tashkent_month_range_to_naive_utc(py, pm)
+    grace_cutoff = start_iso  # если статус получен позже начала прошлого месяца — это ещё грейс-период
+
+    for guest in db_list_tiered_subscribers():
+        guest_id = guest["telegram_id"]
+        tier = guest["tier"]
+        tier_since = guest["tier_since"]
+
+        if not tier_since or tier_since >= grace_cutoff:
+            continue  # статус получен недавно — в этом месяце ещё не спрашиваем план визитов
+
+        visits = db_count_visits_in_range(guest_id, start_iso, end_iso)
+        required = TIER_GOLD_MAINTAIN_VISITS if tier == "gold" else TIER_SILVER_MAINTAIN_VISITS
+
+        if visits >= required:
+            await _retention_extend(guest_id, tier, visits, required)
+        else:
+            await _retention_downgrade(guest_id, tier, visits, required)
+
+    db_set_setting("last_retention_run", ym_key)
+
+
+async def _retention_extend(guest_id: int, tier: str, visits: int, required: int) -> None:
+    bonus_type = f"tier_{tier}_monthly"
+    amount = TIER_GOLD_MONTHLY_BONUS if tier == "gold" else TIER_SILVER_MONTHLY_BONUS
+    discount = TIER_GOLD_DISCOUNT_PERCENT if tier == "gold" else TIER_SILVER_DISCOUNT_PERCENT
+    try:
+        code = db_create_bonus(guest_id, bonus_type)
+        themed_label = tier_label_for_user(guest_id, tier)
+        await bot.send_message(
+            guest_id,
+            f"🎉 План визитов за прошлый месяц выполнен ({visits}/{required})!\n"
+            f"Статус {themed_label} продлён, скидка {discount}% остаётся в силе.\n\n"
+            f"Бонус: {amount} сум на баланс.\n🔑 Код: {code}",
+        )
+    except Exception:
+        logging.warning("не удалось уведомить гостя %s о продлении статуса", guest_id)
+
+
+async def _retention_downgrade(guest_id: int, tier: str, visits: int, required: int) -> None:
+    new_tier = "silver" if tier == "gold" else ""
+    db_set_tier(guest_id, new_tier)
+    old_label = TIER_LABELS.get(tier, tier)
+    new_label = TIER_LABELS.get(new_tier, "без статуса")
+
+    try:
+        await bot.send_message(
+            guest_id,
+            f"⚠️ План визитов за прошлый месяц не выполнен ({visits} из {required}).\n"
+            f"Статус понижен: {old_label} → {new_label}.\n"
+            "Возвращайся чаще, чтобы вернуть привилегии 🙂",
+            reply_markup=main_menu_kb(guest_id),
+        )
+    except Exception:
+        logging.warning("не удалось уведомить гостя %s о понижении статуса", guest_id)
+
+    for admin_id in ADMIN_IDS:
+        try:
+            if new_tier == "silver":
+                note = (
+                    f"понизьте скидку в CRM с {TIER_GOLD_DISCOUNT_PERCENT}% до "
+                    f"{TIER_SILVER_DISCOUNT_PERCENT}%"
+                )
+            else:
+                note = "снимите скидку в CRM полностью"
+            await bot.send_message(
+                admin_id,
+                f"📉 Статус понижен: {old_label} → {new_label}\n"
+                f"🆔 {guest_id}\n"
+                f"Визитов за прошлый месяц: {visits} (нужно было {required})\n\n"
+                f"⚠️ Не забудьте {note}.",
+            )
+        except Exception:
+            logging.warning("не удалось уведомить админа %s о понижении статуса", admin_id)
+
+
 def build_subscribers_csv(date_from_iso: str | None = None, date_to_iso: str | None = None) -> tuple[bytes, int]:
     rows = db_export_all(date_from_iso, date_to_iso)
     tier_map = {"": "Без статуса", "silver": "Серебряный", "gold": "Золотой"}
@@ -2489,6 +2772,7 @@ async def main() -> None:
     asyncio.create_task(reminder_loop())
     asyncio.create_task(feedback_loop())
     asyncio.create_task(winback_loop())
+    asyncio.create_task(retention_loop())
     asyncio.create_task(backup_loop())
     await start_webapp_server()
     await dp.start_polling(bot)
@@ -2496,4 +2780,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
