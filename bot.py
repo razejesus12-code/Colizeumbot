@@ -2097,10 +2097,11 @@ async def cmd_test_winback(message: Message, command: CommandObject) -> None:
 
 
 @router.message(Command("winback_preview"))
-async def cmd_winback_preview(message: Message) -> None:
+async def cmd_winback_preview(message: Message, user_id: int | None = None) -> None:
     # ничего не отправляет — просто показывает, кому прямо сейчас
     # ушло бы win-back-сообщение, если запустить рассылку
-    if not is_owner(message.from_user.id):
+    user_id = user_id if user_id is not None else message.from_user.id
+    if not is_owner(user_id):
         return
     ids = db_due_for_winback(WINBACK_DELAY_DAYS, WINBACK_MIN_VISITS)
     if not ids:
@@ -2118,10 +2119,11 @@ async def cmd_winback_preview(message: Message) -> None:
 
 
 @router.message(Command("run_winback_now"))
-async def cmd_run_winback_now(message: Message, state: FSMContext) -> None:
+async def cmd_run_winback_now(message: Message, state: FSMContext, user_id: int | None = None) -> None:
     # реальная массовая рассылка win-back прямо сейчас (не ждём авто-цикл раз в 6 часов),
     # тем же гостям, что видно в /winback_preview — требует подтверждения, необратимо
-    if not is_owner(message.from_user.id):
+    user_id = user_id if user_id is not None else message.from_user.id
+    if not is_owner(user_id):
         return
     ids = db_due_for_winback(WINBACK_DELAY_DAYS, WINBACK_MIN_VISITS)
     if not ids:
@@ -2163,10 +2165,11 @@ async def cmd_run_winback_confirm(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Command("wheel_nudge"))
-async def cmd_wheel_nudge(message: Message, state: FSMContext) -> None:
+async def cmd_wheel_nudge(message: Message, state: FSMContext, user_id: int | None = None) -> None:
     # напоминание "у тебя есть спин сегодня" — только тем, кому колесо доступно
     # (см. WHEEL_MIN_TIER) и кто ещё не крутил сегодня. Требует подтверждения.
-    if not is_owner(message.from_user.id):
+    user_id = user_id if user_id is not None else message.from_user.id
+    if not is_owner(user_id):
         return
     ids = db_wheel_nudge_targets()
     if not ids:
@@ -2206,11 +2209,12 @@ async def cmd_wheel_nudge_confirm(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Command("wheel_trial_grant"))
-async def cmd_wheel_trial_grant(message: Message, state: FSMContext) -> None:
+async def cmd_wheel_trial_grant(message: Message, state: FSMContext, user_id: int | None = None) -> None:
     # даёт ОДИН пробный спин всем гостям без доступа к колесу (ниже WHEEL_MIN_TIER),
     # у кого ещё нет неиспользованного пробного спина. После одного вращения
     # (см. handle_wheel_spin) спин автоматически сгорает, и колесо снова закрывается.
-    if not is_owner(message.from_user.id):
+    user_id = user_id if user_id is not None else message.from_user.id
+    if not is_owner(user_id):
         return
     ids = db_trial_spin_targets()
     if not ids:
@@ -2282,13 +2286,13 @@ async def cb_owner_more(callback: CallbackQuery, state: FSMContext) -> None:
         pass
 
     if action == "winback_preview":
-        await cmd_winback_preview(callback.message)
+        await cmd_winback_preview(callback.message, user_id=callback.from_user.id)
     elif action == "winback_run":
-        await cmd_run_winback_now(callback.message, state)
+        await cmd_run_winback_now(callback.message, state, user_id=callback.from_user.id)
     elif action == "wheel_nudge":
-        await cmd_wheel_nudge(callback.message, state)
+        await cmd_wheel_nudge(callback.message, state, user_id=callback.from_user.id)
     elif action == "wheel_trial":
-        await cmd_wheel_trial_grant(callback.message, state)
+        await cmd_wheel_trial_grant(callback.message, state, user_id=callback.from_user.id)
 
 
 @router.message(Command("export"))
