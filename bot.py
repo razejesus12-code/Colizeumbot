@@ -460,6 +460,9 @@ def db_init() -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_guest_feedback_created ON guest_feedback(created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_visits_telegram_id ON visits(telegram_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscribers_tier ON subscribers(tier)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscribers_winback_sent ON subscribers(winback_sent)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_subscribers_reminder_sent ON subscribers(reminder_sent)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS bot_settings (
@@ -733,12 +736,22 @@ def db_count_visits_in_range(telegram_id: int, start_iso: str, end_iso: str) -> 
     return row[0] if row else 0
 
 
-def db_list_tiered_subscribers() -> list[dict]:
-    """Все гости с активным статусом (Серебро/Золото) и датой его получения."""
+def db_retention_candidates(start_iso: str, end_iso: str) -> list[dict]:
+    """Серебро/Золото + число визитов за проверяемый месяц — одним запросом
+    с группировкой, вместо отдельного запроса на каждого гостя."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT telegram_id, tier, tier_since FROM subscribers WHERE tier IN ('silver', 'gold')"
+        """
+        SELECT s.telegram_id, s.tier, s.tier_since,
+               COUNT(v.id) AS visits_in_period
+        FROM subscribers s
+        LEFT JOIN visits v
+            ON v.telegram_id = s.telegram_id AND v.visited_at >= ? AND v.visited_at < ?
+        WHERE s.tier IN ('silver', 'gold')
+        GROUP BY s.telegram_id
+        """,
+        (start_iso, end_iso),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -2879,7 +2892,7 @@ async def run_monthly_retention_check() -> None:
     start_iso, end_iso = tashkent_month_range_to_naive_utc(py, pm)
     grace_cutoff = start_iso  # если статус получен позже начала прошлого месяца — это ещё грейс-период
 
-    for guest in db_list_tiered_subscribers():
+    for guest in db_retention_candidates(start_iso, end_iso):
         guest_id = guest["telegram_id"]
         tier = guest["tier"]
         tier_since = guest["tier_since"]
@@ -2887,7 +2900,7 @@ async def run_monthly_retention_check() -> None:
         if not tier_since or tier_since >= grace_cutoff:
             continue  # статус получен недавно — в этом месяце ещё не спрашиваем план визитов
 
-        visits = db_count_visits_in_range(guest_id, start_iso, end_iso)
+        visits = guest["visits_in_period"]
         required = TIER_GOLD_MAINTAIN_VISITS if tier == "gold" else TIER_SILVER_MAINTAIN_VISITS
 
         if visits >= required:
