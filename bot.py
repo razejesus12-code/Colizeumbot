@@ -1229,8 +1229,8 @@ async def handle_contact(message: Message) -> None:
         f"и скидка {TIER_SILVER_DISCOUNT_PERCENT}% в клубе (кроме бара и ночных пакетов)\n"
         f"🥇 {TIER_GOLD_VISITS} визитов — максимальный статус, бонус ещё больше, "
         f"скидка {TIER_GOLD_DISCOUNT_PERCENT}%\n\n"
-        f"Чтобы удержать статус и скидку — заходи от {TIER_SILVER_MAINTAIN_VISITS}/{TIER_GOLD_MAINTAIN_VISITS} "
-        "раз в месяц (Серебро/Золото).\n\n"
+        f"Чтобы удержать статус и скидку — заходи минимум {TIER_SILVER_MAINTAIN_VISITS} раз "
+        f"в месяц на Серебре или {TIER_GOLD_MAINTAIN_VISITS} раз в месяц на Золоте.\n\n"
         "Назвать твои статусы можем в теме твоей любимой игры 🎮"
     )
     await message.answer("В какую игру играешь чаще всего?", reply_markup=game_choice_kb())
