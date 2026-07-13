@@ -62,10 +62,6 @@ REFERRER_BONUS_TEXT = os.environ.get(
     f"Бонус тебе: {BONUS_AMOUNT_REFERRER} сум на баланс.\n"
     "Покажи это сообщение администратору на стойке.",
 )
-REFERRED_EXTRA_TEXT = os.environ.get(
-    "REFERRED_EXTRA_TEXT",
-    "\n\n🙌 Ты пришёл по приглашению друга — этот бонус уже включён в сумму выше!",
-)
 REMINDER_TEXT = os.environ.get(
     "REMINDER_TEXT",
     "Давно не виделись! 👋\n\n"
@@ -1212,7 +1208,6 @@ async def handle_contact(message: Message) -> None:
     bonus_text = f"{bonus_text}\n\n🔑 Код бонуса: {code}"
 
     if referrer_id:
-        bonus_text += REFERRED_EXTRA_TEXT
         try:
             referrer_code = db_create_bonus(referrer_id, "referrer")
             await bot.send_message(referrer_id, f"{REFERRER_BONUS_TEXT}\n\n🔑 Код бонуса: {referrer_code}")
