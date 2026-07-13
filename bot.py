@@ -1041,6 +1041,10 @@ class AdminFlow(StatesGroup):
     waiting_reset_review = State()
 
 
+class FeedbackDetail(StatesGroup):
+    waiting_text = State()
+
+
 class PeriodExportState(StatesGroup):
     waiting_range = State()
 
@@ -2346,9 +2350,8 @@ async def review_screenshot_wrong(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("feedback_"))
-async def cb_feedback(callback: CallbackQuery) -> None:
-    await callback.answer("Спасибо за оценку! 🙌")
+@router.callback_query(F.data.in_({f"feedback_{i}" for i in range(1, 6)}))
+async def cb_feedback(callback: CallbackQuery, state: FSMContext) -> None:
     rating = callback.data.split("_", 1)[1]
     user = callback.from_user
 
@@ -2357,15 +2360,76 @@ async def cb_feedback(callback: CallbackQuery) -> None:
     except Exception:
         pass
 
+    if rating == "5":
+        await callback.answer("Спасибо за оценку! 🙌")
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id, f"📝 Оценка визита: {rating}/5\nГость: {user.full_name} (id {user.id})"
+                )
+            except Exception:
+                logging.warning("не удалось переслать оценку админу %s", admin_id)
+        await callback.message.answer("Спасибо, что поделился впечатлением! 🙏")
+        return
+
+    # низкая оценка (1-4) — сразу спрашиваем, что пошло не так
+    await callback.answer()
+    await state.update_data(feedback_rating=rating)
+    await state.set_state(FeedbackDetail.waiting_text)
+    await callback.message.answer(
+        f"Жаль это слышать 😔 Оценка {rating}/5 — расскажи, пожалуйста, что пошло не так? "
+        "Это поможет нам исправиться.\n\n"
+        "Если не хочешь писать — просто нажми «Пропустить».",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data="feedback_skip")]]
+        ),
+    )
+
+
+@router.callback_query(F.data == "feedback_skip")
+async def cb_feedback_skip(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    rating = data.get("feedback_rating", "?")
+    await state.clear()
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    user = callback.from_user
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
-                admin_id, f"📝 Оценка визита: {rating}/5\nГость: {user.full_name} (id {user.id})"
+                admin_id, f"📝 Оценка визита: {rating}/5 (без комментария)\nГость: {user.full_name} (id {user.id})"
+            )
+        except Exception:
+            logging.warning("не удалось переслать оценку админу %s", admin_id)
+    await callback.message.answer("Понял, спасибо за оценку 🙏")
+
+
+@router.message(FeedbackDetail.waiting_text)
+async def feedback_detail_text(message: Message, state: FSMContext) -> None:
+    if await try_menu_escape(message, state):
+        return
+    data = await state.get_data()
+    rating = data.get("feedback_rating", "?")
+    await state.clear()
+
+    user = message.from_user
+    comment = (message.text or "").strip()
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"📝 Оценка визита: {rating}/5\n"
+                f"Гость: {user.full_name} (id {user.id})\n\n"
+                f"Что пошло не так:\n«{comment}»",
             )
         except Exception:
             logging.warning("не удалось переслать оценку админу %s", admin_id)
 
-    await callback.message.answer("Спасибо, что поделился впечатлением! 🙏")
+    await message.answer("Спасибо, что рассказал — обязательно разберёмся 🙏")
 
 
 # ---------- ФОНОВЫЕ ЗАДАЧИ ----------
