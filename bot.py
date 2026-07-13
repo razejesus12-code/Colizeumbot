@@ -1343,8 +1343,9 @@ async def menu_wheel(message: Message) -> None:
     elig = wheel_eligibility(user_id)
     if not elig["eligible"]:
         left = max(elig["visits_needed"] - elig["visits"], 0)
+        required_label = tier_label_for_user(user_id, WHEEL_MIN_TIER)
         await message.answer(
-            f"Колесо фортуны открывается с 🥈 Серебряного статуса.\n"
+            f"Колесо фортуны открывается со статуса {required_label}.\n"
             f"Визитов: {elig['visits']} из {elig['visits_needed']} — осталось {left} 🙂",
             reply_markup=main_menu_kb(user_id),
         )
@@ -2574,7 +2575,13 @@ async def handle_wheel_status(request: web.Request) -> web.Response:
     today = datetime.now(TASHKENT_TZ).date().isoformat()
     can_spin = elig["eligible"] and db_get_last_spin_date(user_id) != today
 
-    return web.json_response({"subscribed": True, "can_spin": can_spin, **elig})
+    return web.json_response({
+        "subscribed": True,
+        "can_spin": can_spin,
+        "tier_label": tier_label_for_user(user_id, elig["tier"]),
+        "required_tier_label": tier_label_for_user(user_id, WHEEL_MIN_TIER),
+        **elig,
+    })
 
 
 async def handle_wheel_spin(request: web.Request) -> web.Response:
