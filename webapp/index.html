@@ -286,7 +286,7 @@
   <div class="brand-logo">
     <svg id="Слой_1" data-name="Слой 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 439.92 48.98"><defs><style>.cls-1{fill:#fff;}</style></defs><path class="cls-1" d="M309.3,4q0,3.21-4.35,3.21H264.72q-4.37,0-4.36-3.69,0-3.45,4.36-3.45h40.9q3.67,0,3.67,3.93Z"/><path class="cls-1" d="M309.3,45.82Q309.3,49,305,49H264.72q-4.37,0-4.36-3.68,0-3.47,4.36-3.45h40.9q3.67,0,3.67,3.92Z"/><path class="cls-1" d="M185.05,0q3.19,0,3.2,4.37V44.73c0,2.91-1.23,4.37-3.67,4.37s-3.45-1.46-3.45-4.37v-41Q181.13,0,185.05,0Z"/><path class="cls-1" d="M309.3,25.12c0,2.14-1.45,3.2-4.35,3.2H264.72c-2.91,0-4.36-1.22-4.36-3.68q0-3.45,4.36-3.45h40.9q3.67,0,3.67,3.93Z"/><path class="cls-1" d="M248.88,3.41a11.1,11.1,0,0,1-.44,2.29Q243,11.1,212.68,42h32.56q3.64.45,3.64,3.16,0,3.9-4.32,3.9H204.72q-4.32,0-4.33-3.42a13.82,13.82,0,0,1,.45-2.08q5.37-5.4,35.76-36.33H204.72q-4.32,0-4.33-3.41,0-3.66,3.65-3.66h41.2q3.64.48,3.64,3.21Z"/><path class="cls-1" d="M323.15.21q3.15,0,3.16,4.33V42h34.4V3.86q0-3.64,3.88-3.65,3.17,0,3.16,4.33V45.89q0,2.94-4.32,3.21h-41c-1.72,0-2.78-1.3-3.2-3.89V3.86Q319.26.22,323.15.21Z"/><path class="cls-1" d="M48.72,4.22q0,3.17-4.32,3.16H7V41.91h38q3.64,0,3.64,3.89Q48.72,49,44.4,49H3.2c-2,0-3-1.45-3.2-4.34V3.53C0,1.8,1.29.74,3.88.33h41.2C47.51.33,48.72,1.62,48.72,4.22Z"/><path class="cls-1" d="M104.92.21H63.47c-2.58,0-3.88,1.21-3.88,3.65V45.21q.61,3.88,3.2,3.89h41c2.88-.19,4.32-1.25,4.32-3.21V4.55q0-4.33-3.15-4.33ZM66.65,7H101V42H66.64Z"/><path class="cls-1" d="M381.61.2h.47q2.66,0,7.52,8.94,1.5,1.71,19.47,29.84h.23q0-.43,24.46-37.62A6.36,6.36,0,0,1,436.28.2h.44q2.25,0,3.2,3.45v.44q0,1.16-12.8,20.45,12.81,19.56,12.8,20.66v.69c-.61,2.13-1.68,3.21-3.2,3.21h-.44q-2.75,0-8.71-10.8A56.11,56.11,0,0,1,423,31.2q-.24,0-11.2,16.73a3.8,3.8,0,0,1-2.31,1.16h-.68q-2.37,0-9.15-11.71l-4.32-6.18q-9.47,15.52-11.67,17.45l-1.6.44h-.48q-2.31,0-3.2-3.45V45.2q0-1.1,12.8-20.66V24.3Q379.47,7.2,378.4,4.09V3.64q1-3.45,3.2-3.45Z"/><path class="cls-1" d="M166.21,42H128V4.54q0-4.33-3.16-4.33C122.25.21,121,1.43,121,3.86v41.4c0,.05,0,.09,0,.15a3.32,3.32,0,0,0,1.3,2.9,2.63,2.63,0,0,0,.87.59,2.55,2.55,0,0,0,1,.19h41.36c2.9,0,4.36-1.07,4.36-3.21q0-3.93-3.68-3.92Z"/></svg>
   </div>
-  <div class="subtitle">Колесо Фортуны — доступно с 🥈 Серебряного статуса</div>
+  <div class="subtitle">Колесо Фортуны — доступно с определённого статуса</div>
 
   <div class="wheel-outer">
     <div class="wheel-glow"></div>
@@ -339,7 +339,7 @@
   const resultCode = document.getElementById("resultCode");
   const resultHint = document.getElementById("resultHint");
 
-  const TIER_LABEL = { "": "Без статуса", silver: "🥈 Серебряный", gold: "🥇 Золотой" };
+  let requiredTierLabel = "нужного статуса";
 
   let currentRotation = 0;
   let spinning = false;
@@ -362,7 +362,7 @@
     const need = data.visits_needed || 0;
     const have = data.visits || 0;
     const left = Math.max(need - have, 0);
-    statusText.textContent = `Доступно с 🥈 Серебряного статуса. Твой статус: ${TIER_LABEL[data.tier] || "Без статуса"}`;
+    statusText.textContent = `Доступно со статуса ${data.required_tier_label || "нужного статуса"}. Твой статус: ${data.tier_label || "Без статуса"}`;
     progressWrap.style.display = "block";
     const pct = need ? Math.min((have / need) * 100, 100) : 0;
     progressFill.style.width = pct + "%";
@@ -388,6 +388,9 @@
         statusText.textContent = "Открой бота и поделись номером телефона, чтобы завершить регистрацию 🙂";
         spinBtn.textContent = "Недоступно";
         return;
+      }
+      if (data.required_tier_label) {
+        requiredTierLabel = data.required_tier_label;
       }
       if (!data.eligible) {
         showLocked(data);
@@ -428,7 +431,7 @@
         if (data.error === "already_spun") {
           statusText.textContent = "Уже крутил сегодня, приходи завтра!";
         } else if (data.error === "not_eligible") {
-          statusText.textContent = "Доступно только с Серебряного статуса и выше.";
+          statusText.textContent = `Доступно только со статуса ${requiredTierLabel} и выше.`;
         } else {
           statusText.textContent = "Не получилось, попробуй позже.";
         }
