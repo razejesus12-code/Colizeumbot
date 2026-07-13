@@ -445,6 +445,20 @@ def db_init() -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS guest_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER,
+            kind TEXT,
+            rating TEXT,
+            comment TEXT,
+            photo_file_id TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_guest_feedback_created ON guest_feedback(created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_visits_telegram_id ON visits(telegram_id)")
     conn.execute(
         """
@@ -641,6 +655,72 @@ def db_log_visit(telegram_id: int) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def db_log_feedback(
+    telegram_id: int,
+    kind: str,
+    rating: str | None = None,
+    comment: str | None = None,
+    photo_file_id: str | None = None,
+) -> None:
+    """kind: 'review_photo' / 'review_no_photo' (отзыв за бонус) или 'rating' (оценка визита)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO guest_feedback (telegram_id, kind, rating, comment, photo_file_id, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (telegram_id, kind, rating, comment, photo_file_id, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_list_recent_feedback(limit: int = 15, kinds: tuple[str, ...] | None = None) -> list[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    where = ""
+    params: list = []
+    if kinds:
+        where = f"WHERE g.kind IN ({','.join('?' for _ in kinds)})"
+        params.extend(kinds)
+    params.append(limit)
+    rows = conn.execute(
+        f"""
+        SELECT g.id, g.telegram_id, g.kind, g.rating, g.comment, g.photo_file_id, g.created_at,
+               s.full_name, s.phone
+        FROM guest_feedback g
+        LEFT JOIN subscribers s ON s.telegram_id = g.telegram_id
+        {where}
+        ORDER BY g.created_at DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def db_export_all_feedback(kinds: tuple[str, ...] | None = None) -> list[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    where = ""
+    params: list = []
+    if kinds:
+        where = f"WHERE g.kind IN ({','.join('?' for _ in kinds)})"
+        params.extend(kinds)
+    rows = conn.execute(
+        f"""
+        SELECT g.telegram_id, g.kind, g.rating, g.comment, g.created_at,
+               s.full_name, s.phone
+        FROM guest_feedback g
+        LEFT JOIN subscribers s ON s.telegram_id = g.telegram_id
+        {where}
+        ORDER BY g.created_at DESC
+        """,
+        params,
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def db_count_visits_in_range(telegram_id: int, start_iso: str, end_iso: str) -> int:
@@ -2144,6 +2224,126 @@ async def cmd_export_codes(message: Message) -> None:
     )
 
 
+_FEEDBACK_KIND_LABEL = {
+    "review_photo": "⭐ Отзыв (с фото)",
+    "review_no_photo": "⭐ Отзыв (без фото)",
+    "rating": "📝 Оценка визита",
+}
+RATING_KINDS = ("rating",)
+MAPS_REVIEW_KINDS = ("review_photo", "review_no_photo")
+
+
+def _format_feedback_lines(rows: list[dict]) -> str:
+    lines = [f"Последние {len(rows)}:\n"]
+    for r in rows:
+        kind_label = _FEEDBACK_KIND_LABEL.get(r["kind"], r["kind"])
+        name = r["full_name"] or "без имени"
+        when = (r["created_at"] or "")[:16].replace("T", " ")
+        line = f"{kind_label} — {name} ({r['phone'] or r['telegram_id']}) — {when}"
+        if r["rating"]:
+            line += f"\nОценка: {r['rating']}/5"
+        if r["comment"]:
+            line += f"\n«{r['comment']}»"
+        if r["photo_file_id"]:
+            line += "\n📸 есть скриншот"
+        lines.append(line)
+    return "\n\n".join(lines)
+
+
+@router.message(Command("reviews"))
+async def cmd_reviews(message: Message, command: CommandObject) -> None:
+    """Только оценки визита 1-5 (с комментариями, если гость их оставил)."""
+    if not is_admin(message.from_user.id):
+        return
+
+    limit = 15
+    arg = (command.args or "").strip()
+    if arg.isdigit():
+        limit = min(int(arg), 50)
+
+    rows = db_list_recent_feedback(limit, kinds=RATING_KINDS)
+    if not rows:
+        await message.answer("Оценок визитов пока нет.")
+        return
+
+    await message.answer(_format_feedback_lines(rows))
+
+
+@router.message(Command("reviews_maps"))
+async def cmd_reviews_maps(message: Message, command: CommandObject) -> None:
+    """Только отзывы на картах (2GIS/Google/Яндекс) за бонус."""
+    if not is_admin(message.from_user.id):
+        return
+
+    limit = 15
+    arg = (command.args or "").strip()
+    if arg.isdigit():
+        limit = min(int(arg), 50)
+
+    rows = db_list_recent_feedback(limit, kinds=MAPS_REVIEW_KINDS)
+    if not rows:
+        await message.answer("Отзывов на картах пока нет.")
+        return
+
+    await message.answer(_format_feedback_lines(rows))
+
+
+def build_feedback_csv(kinds: tuple[str, ...] | None = None) -> tuple[bytes, int]:
+    rows = db_export_all_feedback(kinds)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["Тип", "Оценка", "Комментарий", "Имя гостя", "Телефон", "Telegram ID", "Дата"])
+    for r in rows:
+        writer.writerow(
+            [
+                _FEEDBACK_KIND_LABEL.get(r["kind"], r["kind"]),
+                r["rating"] or "",
+                r["comment"] or "",
+                r["full_name"] or "",
+                r["phone"] or "",
+                r["telegram_id"] or "",
+                (r["created_at"] or "")[:16].replace("T", " "),
+            ]
+        )
+    return buffer.getvalue().encode("utf-8-sig"), len(rows)
+
+
+@router.message(Command("export_reviews"))
+async def cmd_export_reviews(message: Message) -> None:
+    """Выгрузка только оценок визита."""
+    if not is_admin(message.from_user.id):
+        return
+
+    csv_bytes, count = build_feedback_csv(kinds=RATING_KINDS)
+    if count == 0:
+        await message.answer("Оценок визитов пока нет.")
+        return
+
+    filename = f"colizeum_ratings_{datetime.now(TASHKENT_TZ).date().isoformat()}.csv"
+    await message.answer_document(
+        BufferedInputFile(csv_bytes, filename=filename),
+        caption=f"Выгрузка оценок визита: {count} шт.",
+    )
+
+
+@router.message(Command("export_reviews_maps"))
+async def cmd_export_reviews_maps(message: Message) -> None:
+    """Выгрузка только отзывов на картах."""
+    if not is_admin(message.from_user.id):
+        return
+
+    csv_bytes, count = build_feedback_csv(kinds=MAPS_REVIEW_KINDS)
+    if count == 0:
+        await message.answer("Отзывов на картах пока нет.")
+        return
+
+    filename = f"colizeum_reviews_maps_{datetime.now(TASHKENT_TZ).date().isoformat()}.csv"
+    await message.answer_document(
+        BufferedInputFile(csv_bytes, filename=filename),
+        caption=f"Выгрузка отзывов на картах: {count} шт.",
+    )
+
+
 @router.message(Command("vip"))
 async def cmd_vip(message: Message) -> None:
     if not is_admin(message.from_user.id):
@@ -2321,6 +2521,7 @@ async def review_screenshot_received(message: Message, state: FSMContext) -> Non
         return
 
     db_mark_review_claimed(user_id)
+    db_log_feedback(user_id, bonus_type, photo_file_id=message.photo[-1].file_id)
     code = db_create_bonus(user_id, bonus_type)
     amount = BONUS_AMOUNTS.get(bonus_type, "")
     await message.answer(f"🙏 Спасибо за отзыв!\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
@@ -2363,6 +2564,7 @@ async def cb_feedback(callback: CallbackQuery, state: FSMContext) -> None:
 
     if rating == "5":
         await callback.answer("Спасибо за оценку! 🙌")
+        db_log_feedback(user.id, "rating", rating=rating)
         for admin_id in ADMIN_IDS:
             try:
                 await bot.send_message(
@@ -2399,6 +2601,7 @@ async def cb_feedback_skip(callback: CallbackQuery, state: FSMContext) -> None:
         pass
 
     user = callback.from_user
+    db_log_feedback(user.id, "rating", rating=rating)
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
@@ -2419,6 +2622,7 @@ async def feedback_detail_text(message: Message, state: FSMContext) -> None:
 
     user = message.from_user
     comment = (message.text or "").strip()
+    db_log_feedback(user.id, "rating", rating=rating, comment=comment)
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
