@@ -2464,6 +2464,13 @@ async def cmd_vip(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 
+def db_set_phone(telegram_id: int, phone: str) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE subscribers SET phone = ? WHERE telegram_id = ?", (phone, telegram_id))
+    conn.commit()
+    conn.close()
+
+
 async def do_reset_review(message: Message, arg: str) -> None:
     arg = arg.strip()
     if not arg.isdigit():
@@ -2486,6 +2493,29 @@ async def cmd_reset_review(message: Message, command: CommandObject) -> None:
         )
         return
     await do_reset_review(message, arg)
+
+
+@router.message(Command("setphone"))
+async def cmd_setphone(message: Message, command: CommandObject) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    parts = (command.args or "").strip().split()
+    if len(parts) != 2 or not parts[0].isdigit():
+        await message.answer(
+            "Использование: /setphone TELEGRAM_ID НОВЫЙ_НОМЕР\n"
+            "(поправить номер, если гость при регистрации отправил не свой — "
+            "например рабочий, а не тот, что привязан к его Telegram)"
+        )
+        return
+    telegram_id = int(parts[0])
+    new_phone = parts[1]
+    guest = db_get_subscriber_by_id(telegram_id)
+    if not guest:
+        await message.answer("Гость с таким ID не найден в базе.")
+        return
+    old_phone = guest["phone"]
+    db_set_phone(telegram_id, new_phone)
+    await message.answer(f"✅ Номер обновлён.\n🆔 {telegram_id}\n📞 {old_phone} → {new_phone}")
 
 
 @router.message(Command("delete_all_users"))
