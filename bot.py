@@ -335,6 +335,7 @@ WHEEL_BUTTON_LOCKED = KeyboardButton(text="🔒 Колесо Фортуны")
 ADMIN_BUTTON_CODE = "🔑 Ввести код"
 ADMIN_BUTTON_FIND = "🔍 Поиск гостя"
 ADMIN_BUTTON_RESET_REVIEW = "♻️ Снять блокировку отзыва"
+ADMIN_BUTTON_SETPHONE = "📞 Привязать номер"
 OWNER_BUTTON_CODES_PERIOD = "📅 Коды за период"
 OWNER_BUTTON_GUESTS_PERIOD = "📅 Новые гости за период"
 OWNER_BUTTON_MORE = "⚙️ Ещё"
@@ -357,7 +358,7 @@ def guest_menu_rows(user_id: int) -> list[list[KeyboardButton]]:
 def admin_menu_rows() -> list[list[KeyboardButton]]:
     return [
         [KeyboardButton(text=ADMIN_BUTTON_CODE), KeyboardButton(text=ADMIN_BUTTON_FIND)],
-        [KeyboardButton(text=ADMIN_BUTTON_RESET_REVIEW)],
+        [KeyboardButton(text=ADMIN_BUTTON_RESET_REVIEW), KeyboardButton(text=ADMIN_BUTTON_SETPHONE)],
     ]
 
 
@@ -1135,6 +1136,7 @@ class AdminFlow(StatesGroup):
     waiting_code = State()
     waiting_find = State()
     waiting_reset_review = State()
+    waiting_setphone = State()
 
 
 class FeedbackDetail(StatesGroup):
@@ -1490,7 +1492,7 @@ async def admin_btn_code(message: Message, state: FSMContext) -> None:
 
 
 _ESCAPE_MENU_TEXTS = {
-    ADMIN_BUTTON_CODE, ADMIN_BUTTON_FIND, ADMIN_BUTTON_RESET_REVIEW,
+    ADMIN_BUTTON_CODE, ADMIN_BUTTON_FIND, ADMIN_BUTTON_RESET_REVIEW, ADMIN_BUTTON_SETPHONE,
     OWNER_BUTTON_CODES_PERIOD, OWNER_BUTTON_GUESTS_PERIOD, OWNER_BUTTON_MORE,
     "🎉 Акции", "📍 Клуб", "👥 Пригласить друга", "🧾 Прайс",
     "✅ Я в клубе", "💎 Мой статус", WHEEL_BUTTON.text, WHEEL_BUTTON_LOCKED.text,
@@ -1555,6 +1557,22 @@ async def admin_flow_reset_review(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await do_reset_review(message, (message.text or "").strip())
+
+
+@router.message(F.text == ADMIN_BUTTON_SETPHONE)
+async def admin_btn_setphone(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(AdminFlow.waiting_setphone)
+    await message.answer("Пришли: ID НОВЫЙ_НОМЕР (через пробел)\nНапример: 589295361 998901234567")
+
+
+@router.message(AdminFlow.waiting_setphone)
+async def admin_flow_setphone(message: Message, state: FSMContext) -> None:
+    if await try_menu_escape(message, state):
+        return
+    await state.clear()
+    await do_setphone(message, (message.text or "").strip())
 
 
 
@@ -2501,16 +2519,12 @@ async def cmd_reset_review(message: Message, command: CommandObject) -> None:
     await do_reset_review(message, arg)
 
 
-@router.message(Command("setphone"))
-async def cmd_setphone(message: Message, command: CommandObject) -> None:
-    if not is_admin(message.from_user.id):
-        return
-    parts = (command.args or "").strip().split()
+async def do_setphone(message: Message, args_text: str) -> None:
+    parts = args_text.strip().split()
     if len(parts) != 2 or not parts[0].isdigit():
         await message.answer(
-            "Использование: /setphone TELEGRAM_ID НОВЫЙ_НОМЕР\n"
-            "(поправить номер, если гость при регистрации отправил не свой — "
-            "например рабочий, а не тот, что привязан к его Telegram)"
+            "Пришли: ID НОВЫЙ_НОМЕР (через пробел)\n"
+            "Например: 589295361 998901234567"
         )
         return
     telegram_id = int(parts[0])
@@ -2522,6 +2536,20 @@ async def cmd_setphone(message: Message, command: CommandObject) -> None:
     old_phone = guest["phone"]
     db_set_phone(telegram_id, new_phone)
     await message.answer(f"✅ Номер обновлён.\n🆔 {telegram_id}\n📞 {old_phone} → {new_phone}")
+
+
+@router.message(Command("setphone"))
+async def cmd_setphone(message: Message, command: CommandObject) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    if not (command.args or "").strip():
+        await message.answer(
+            "Использование: /setphone TELEGRAM_ID НОВЫЙ_НОМЕР\n"
+            "(поправить номер, если гость при регистрации отправил не свой — "
+            "например рабочий, а не тот, что привязан к его Telegram)"
+        )
+        return
+    await do_setphone(message, command.args or "")
 
 
 @router.message(Command("delete_all_users"))
