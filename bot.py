@@ -1570,7 +1570,7 @@ async def admin_btn_reset_review(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
         return
     await state.set_state(AdminFlow.waiting_reset_review)
-    await message.answer("Пришли Telegram ID гостя, которому снять блокировку отзыва:")
+    await message.answer("Пришли номер телефона или Telegram ID гостя, которому снять блокировку отзыва:")
 
 
 @router.message(AdminFlow.waiting_reset_review)
@@ -2519,12 +2519,16 @@ def db_set_phone(telegram_id: int, phone: str) -> None:
 
 async def do_reset_review(message: Message, arg: str) -> None:
     arg = arg.strip()
-    if not arg.isdigit():
-        await message.answer("Это должен быть числовой Telegram ID гостя.")
+    if not arg:
+        await message.answer("Пришли номер телефона или Telegram ID гостя.")
         return
-    telegram_id = int(arg)
-    db_reset_review_claim(telegram_id)
-    await message.answer(f"Готово ✅ Гость {telegram_id} снова может получить бонус за отзыв.")
+    target, matches = resolve_guest(arg)
+    if not target:
+        await message.answer(_no_match_reply(matches))
+        return
+    db_reset_review_claim(target["telegram_id"])
+    name = target["full_name"] or "без имени"
+    await message.answer(f"Готово ✅ {name} ({target['phone']}) снова может получить бонус за отзыв.")
 
 
 @router.message(Command("reset_review"))
@@ -2532,9 +2536,9 @@ async def cmd_reset_review(message: Message, command: CommandObject) -> None:
     if not is_admin(message.from_user.id):
         return
     arg = (command.args or "").strip()
-    if not arg.isdigit():
+    if not arg:
         await message.answer(
-            "Использование: /reset_review TELEGRAM_ID\n"
+            "Использование: /reset_review НОМЕР_ИЛИ_ID\n"
             "(снимает отметку «бонус за отзыв уже получен» у гостя, чтобы он мог попробовать снова)"
         )
         return
