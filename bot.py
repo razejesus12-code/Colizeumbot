@@ -461,6 +461,10 @@ def db_init() -> None:
         )
         """
     )
+    try:
+        conn.execute("ALTER TABLE guest_feedback ADD COLUMN review_status TEXT DEFAULT 'pending'")
+    except sqlite3.OperationalError:
+        pass  # колонка уже есть (на существующей базе)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_guest_feedback_created ON guest_feedback(created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_visits_telegram_id ON visits(telegram_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_subscribers_tier ON subscribers(tier)")
@@ -670,14 +674,32 @@ def db_log_feedback(
     rating: str | None = None,
     comment: str | None = None,
     photo_file_id: str | None = None,
-) -> None:
-    """kind: 'review_photo' / 'review_no_photo' (отзыв за бонус) или 'rating' (оценка визита)."""
+) -> int:
+    """kind: 'review_photo' / 'review_no_photo' (отзыв за бонус) или 'rating' (оценка визита).
+    Возвращает id вставленной записи."""
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO guest_feedback (telegram_id, kind, rating, comment, photo_file_id, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (telegram_id, kind, rating, comment, photo_file_id, datetime.now().isoformat()),
     )
+    conn.commit()
+    feedback_id = cur.lastrowid
+    conn.close()
+    return feedback_id
+
+
+def db_get_feedback_by_id(feedback_id: int) -> dict | None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM guest_feedback WHERE id = ?", (feedback_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def db_set_review_status(feedback_id: int, status: str) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE guest_feedback SET review_status = ? WHERE id = ?", (status, feedback_id))
     conn.commit()
     conn.close()
 
@@ -2690,24 +2712,102 @@ async def review_screenshot_received(message: Message, state: FSMContext) -> Non
         return
 
     db_mark_review_claimed(user_id)
-    db_log_feedback(user_id, bonus_type, photo_file_id=message.photo[-1].file_id)
-    code = db_create_bonus(user_id, bonus_type)
-    amount = BONUS_AMOUNTS.get(bonus_type, "")
-    await message.answer(f"🙏 Спасибо за отзыв!\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
+    photo_file_id = message.photo[-1].file_id
+    feedback_id = db_log_feedback(user_id, bonus_type, photo_file_id=photo_file_id)
+    await message.answer(
+        "🙏 Спасибо за отзыв! Отправил администратору на проверку — "
+        "как подтвердят, сразу пришлём код бонуса."
+    )
 
     label = BONUS_LABELS.get(bonus_type, bonus_type)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"revconf:{feedback_id}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"revrej:{feedback_id}"),
+            ]
+        ]
+    )
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_photo(
                 admin_id,
-                message.photo[-1].file_id,
+                photo_file_id,
                 caption=(
                     f"📸 Скриншот отзыва от {message.from_user.full_name} (id {user_id})\n"
-                    f"Тип: {label}\nКод: {code}"
+                    f"Тип: {label}"
                 ),
+                reply_markup=kb,
             )
         except Exception:
             logging.warning("не удалось переслать скриншот отзыва админу %s", admin_id)
+
+
+@router.callback_query(F.data.startswith("revconf:"))
+async def cb_review_confirm(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    feedback_id = int(callback.data.split(":", 1)[1])
+    fb = db_get_feedback_by_id(feedback_id)
+    if not fb:
+        await callback.answer("Запись не найдена", show_alert=True)
+        return
+    if fb.get("review_status") != "pending":
+        await callback.answer("Уже обработано", show_alert=True)
+        return
+
+    db_set_review_status(feedback_id, "confirmed")
+    guest_id = fb["telegram_id"]
+    bonus_type = fb["kind"]
+    code = db_create_bonus(guest_id, bonus_type)
+    amount = BONUS_AMOUNTS.get(bonus_type, "")
+
+    await callback.answer("Подтверждено")
+    try:
+        if callback.message.caption:
+            await callback.message.edit_caption(caption=callback.message.caption + "\n\n✅ Подтверждено")
+    except Exception:
+        pass
+
+    try:
+        await bot.send_message(guest_id, f"✅ Отзыв подтверждён!\nБонус: {amount}\n\n🔑 Код бонуса: {code}")
+    except Exception:
+        logging.warning("не удалось уведомить гостя %s о подтверждении отзыва", guest_id)
+
+
+@router.callback_query(F.data.startswith("revrej:"))
+async def cb_review_reject(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    feedback_id = int(callback.data.split(":", 1)[1])
+    fb = db_get_feedback_by_id(feedback_id)
+    if not fb:
+        await callback.answer("Запись не найдена", show_alert=True)
+        return
+    if fb.get("review_status") != "pending":
+        await callback.answer("Уже обработано", show_alert=True)
+        return
+
+    db_set_review_status(feedback_id, "rejected")
+    guest_id = fb["telegram_id"]
+
+    await callback.answer("Отклонено")
+    try:
+        if callback.message.caption:
+            await callback.message.edit_caption(caption=callback.message.caption + "\n\n❌ Отклонено")
+    except Exception:
+        pass
+
+    try:
+        await bot.send_message(
+            guest_id,
+            "К сожалению, твой отзыв не приняли — возможно, скриншот не подошёл. "
+            "Если это ошибка, обратись к администратору на стойке.",
+        )
+    except Exception:
+        logging.warning("не удалось уведомить гостя %s об отклонении отзыва", guest_id)
 
 
 @router.message(ReviewState.waiting_screenshot)
