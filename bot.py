@@ -1557,6 +1557,7 @@ async def admin_flow_reset_review(message: Message, state: FSMContext) -> None:
     await do_reset_review(message, (message.text or "").strip())
 
 
+
 def period_picker_kb(kind: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -1826,7 +1827,11 @@ async def do_redeem(message: Message, code: str) -> None:
     label = BONUS_LABELS.get(redeemed["bonus_type"], redeemed["bonus_type"])
     amount = BONUS_AMOUNTS.get(redeemed["bonus_type"])
     amount_line = f"\n💰 Начислить: {amount}" if amount else ""
-    await message.answer(f"✅ Бонус активирован!\nТип: {label}{amount_line}\nID гостя: {redeemed['telegram_id']}")
+    guest = db_get_subscriber_by_id(redeemed["telegram_id"])
+    guest_phone = guest["phone"] if guest else "неизвестен"
+    await message.answer(
+        f"✅ Бонус активирован!\nТип: {label}{amount_line}\n📞 {guest_phone}\nID гостя: {redeemed['telegram_id']}"
+    )
 
 
 @router.message(Command("redeem"))
@@ -1863,10 +1868,11 @@ async def cb_checkin_confirm(callback: CallbackQuery) -> None:
     guest_id = row["telegram_id"]
     guest = db_get_subscriber_by_id(guest_id)
     guest_name = guest["full_name"] if guest else "без имени"
+    guest_phone = guest["phone"] if guest else "неизвестен"
 
     if row["bonus_type"] == "checkin":
         extra = await apply_confirmed_checkin(guest_id)
-        text = f"✅ Визит подтверждён\n👤 {guest_name}\n🆔 {guest_id}{extra}"
+        text = f"✅ Визит подтверждён\n👤 {guest_name}\n📞 {guest_phone}\n🆔 {guest_id}{extra}"
     else:
         amount = BONUS_AMOUNTS.get(row["bonus_type"], "")
         text = f"✅ Бонус подтверждён\n👤 {guest_name}\n🆔 {guest_id}\n💰 Начислить: {amount}"
